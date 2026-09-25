@@ -6,8 +6,8 @@ defaultTargets = ["trust-extract"]
 [[require]]
 name = "MeaningGraph"
 git = "https://github.com/LeanTrustBuilders/meaning-graph"
-# The branch carrying the current code on this toolchain (main follows the newest one).
-rev = "lean-v4.34.0"
+# `main` follows the newest toolchain; branches `lean-v<toolchain>` carry the same code for older ones.
+rev = "main"
 
 [[require]]
 name = "semantic_hash"
@@ -17,8 +17,9 @@ rev = "0496f6d7b650cb03c9ffc61089ffd400dfd98564"
 [[require]]
 name = "TrustAnnotations"
 git = "https://github.com/LeanTrustBuilders/annotations"
-# The annotations package is tagged by toolchain, like this one.
-rev = "v4.34.0"
+# Like MeaningGraph: `main` follows the newest toolchain, `lean-v<toolchain>` older ones.
+rev = "main"
+
 
 [[lean_lib]]
 name = "TrustExtractor"

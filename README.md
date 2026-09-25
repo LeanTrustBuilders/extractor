@@ -78,14 +78,17 @@ part, and writes 156 MB. Each part reports how long each of its steps takes.
 ## The dataset
 
 ```
-meta.json                    what produced the dataset, from what; the edge files and facets it holds
+meta.json                    what produced the dataset, from what; the edge files and facets it holds;
+                             the packages imported, with their module counts and which import which
 decls.jsonl                  one node per line: id, name, module, package, scope, kind, isProp, hashes
+modules.jsonl                one project module per line: name, source path, imports, module docstrings
 edges/statement.bin          little-endian int32 pairs (source id, target id)
 edges/meaning.bin
 edges/term.bin
 facets/docstring.jsonl       one file per facet, one line per declaration, keyed by "decl"
 facets/source.jsonl
 facets/axioms.jsonl
+facets/statement.jsonl
 facets/annotation.<attr>.jsonl
 ```
 
@@ -112,9 +115,17 @@ All three are invariant under renaming binders and universe parameters, and the 
 invariant under renaming the declaration itself, which is how reviews follow renames.
 
 **Facets:** `docstring`, `source` (path, range, and the keyword the declaration is written with, such
-as `theorem` or `lemma`), `axioms` (and whether `sorryAx` is among them), and one
+as `theorem` or `lemma`), `axioms` (and whether `sorryAx` is among them), `statement`, and one
 `annotation.<attr>` facet per attribute recorded in the TrustAnnotations extension, including
-attributes defined after this extractor was released.
+attributes defined after this extractor was released (`claim`, `example_of`, `specifies`,
+`characterization`, …; one row per declaration, with the payload of each application).
+
+`statement` takes each statement apart, as a reader needs it: its binders, each with its name, its
+type and its role (a **type**, a **variable**, a **hypothesis**, or an **instance**), the conclusion
+under them, and, for a definition, its body; for a structure, its fields; for another inductive
+type, its constructors. Everything is pretty-printed by Lean from inside the declaration's
+namespace, with a bounded number of steps for a body (`⋯` marks what was cut). It is computed in
+parallel chunks; `--no-statements` skips it.
 
 ## Build
 
