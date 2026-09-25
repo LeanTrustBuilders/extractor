@@ -6,6 +6,7 @@ import TrustExtractor.Hash
 import TrustExtractor.Source
 import TrustExtractor.Packages
 import TrustExtractor.Deps
+import TrustExtractor.Context
 
 /-!
 # Extraction: a compiled project to an S2 dataset
@@ -51,7 +52,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/0"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.2.0"
+def extractorVersion : String := "0.2.1"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
@@ -253,7 +254,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
     | none => .anonymous
 
   -- The project declarations of the requested modules, in module order.
-  let ctx := MeaningGraph.Context.of env cfg.root
+  let ctx ← contextOf env cfg.root t0
   progress t0 s!"dependency tables: {ctx.constants.size} project constants, {ctx.exposed.size} exposed"
   let mut positions : Std.HashMap Name Nat := {}
   let mut ownedInfos : Array (Name × ConstantInfo) := #[]
@@ -283,6 +284,13 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   let deps ← depsOf ctx targets cfg.term
   progress t0 s!"dependencies of {deps.size} project declarations"
   if cfg.checkDeps then
+    -- The notation table, against MeaningGraph's own (which is slow on large projects).
+    let dedup (a : Array Name) : Array Name := a.foldl (fun acc n => if acc.contains n then acc else acc.push n) #[]
+    let refNotations := MeaningGraph.notationExpansionDeps env ctx.constants
+    let sameNotations := refNotations.size == ctx.notationDeps.size &&
+      refNotations.toList.all fun (k, v) => dedup v == dedup (ctx.notationDeps.getD k #[])
+    unless sameNotations do
+      throw <| IO.userError "the notation table differs from MeaningGraph's"
     let mut cache : MeaningGraph.Cache := {}
     let mut mismatches := 0
     for h : i in [0:deps.size] do
