@@ -8,7 +8,7 @@
    "rev": "9596a7b4a7c74822563bc51fae47c07c3d1df0c4",
    "name": "TrustAnnotations",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "main",
+   "inputRev": "v4.34.0-rc2",
    "inherited": false,
    "configFile": "lakefile.toml"},
   {"url": "https://github.com/RemyDegenne/challenge-gen",

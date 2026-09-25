@@ -21,6 +21,11 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 cp -r "$here/fixture" "$work/a"
+# The fixture is built with the extractor's toolchain and its revision of the annotations package,
+# whatever its own files say: the extractor can only read what its own Lean wrote.
+cp "$root/lean-toolchain" "$work/a/lean-toolchain"
+rev=$(python3 -c "import json, sys; print(next(p['rev'] for p in json.load(open(sys.argv[1]))['packages'] if p['name'] == 'TrustAnnotations'))" "$root/lake-manifest.json")
+sed -i "s/^rev = .*/rev = \"$rev\"/" "$work/a/lakefile.toml"
 (cd "$work/a" && lake build -q >/dev/null)
 (cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a" --commit A --repo test/fixture)
 (cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a2" --commit A --repo test/fixture)

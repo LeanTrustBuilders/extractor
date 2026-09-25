@@ -46,7 +46,8 @@ def main() -> int:
     # meta.json
     m = a["meta"]
     check(m["spec"] == "ltb-dataset/0", "meta: spec")
-    check(m["toolchain"] == "leanprover/lean4:v4.34.0-rc2", f"meta: toolchain is {m['toolchain']}")
+    pinned = (Path(__file__).resolve().parents[1] / "lean-toolchain").read_text().strip()
+    check(m["toolchain"] == pinned, f"meta: toolchain is {m['toolchain']}, not the extractor's {pinned}")
     check(m["library"]["commit"] == "A" and m["library"]["root"] == "Fixture", "meta: library")
     check(m["hasher"]["local"] == "ltb-local-v1", "meta: local hasher")
     check({e["name"] for e in m["edges"]} == {"statement", "meaning", "term"}, "meta: edge notions")
