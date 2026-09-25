@@ -9,8 +9,9 @@ shows it: the binders of the declaration's type, each with the role it plays, an
 defined under them.
 
 * A binder whose type is a proposition is a **hypothesis**; one whose type is a sort (or a family of
-  sorts) is a **type**; an instance-implicit binder is an **instance**, which a view shows next to
-  the binder it is about; everything else is a **variable**.
+  sorts) is a **type**; an instance-implicit binder, or any binder whose type is a class, is an
+  **instance**, which a view shows next to the binder it is about; everything else is a
+  **variable**.
 * Names are printed from inside the declaration's namespace, as its source reads them.
 * `conclusion` is what remains of the type under the binders: for a theorem, the claim; for a
   definition, the type of what it defines.
@@ -36,10 +37,13 @@ binder's `inst✝`, an auto-bound variable), which a view shows by its type alon
 def binderDisplayName (n : Name) : String :=
   if n.hasMacroScopes || n.isAnonymous then "" else n.toString
 
-/-- The role a local hypothesis plays in a statement. -/
+/-- The role a local hypothesis plays in a statement. A binder whose type is a class application is
+an instance whatever its brackets (`{mΩ : MeasurableSpace Ω}` as much as `[NeZero K]`): it is
+structure put on another binder, which a view shows next to it. -/
 def binderRole (decl : LocalDecl) : MetaM String := do
   if decl.binderInfo.isInstImplicit then return "instance"
   let ty ← instantiateMVars decl.type
+  if (← isClass? ty).isSome then return "instance"
   if (← isProp ty) then return "hypothesis"
   if ty.getForallBody.isSort then return "type"
   return "variable"
