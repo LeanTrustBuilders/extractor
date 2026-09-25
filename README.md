@@ -118,6 +118,12 @@ lake build
 pin afterwards and rebuild from clean (`rm -rf .lake/build`), or the binary is built for the wrong
 Lean.
 
+**Moving to a new toolchain.** `main` follows the newest toolchain the libraries use; a release tag
+keeps each older one buildable. To move: tag the annotations package for the new toolchain (the
+extractor requires it by toolchain tag), set `lean-toolchain` and the `TrustAnnotations` revision,
+`lake update TrustAnnotations`, run the tests, and tag `v<version>-lean-v<toolchain>`. The fixture
+is built with whatever toolchain and annotations revision the extractor is pinned to.
+
 ## Tests
 
 ```bash

@@ -30,7 +30,8 @@ rev = "v4.34.0"
 [[require]]
 name = "TrustAnnotations"
 git = "https://github.com/LeanTrustBuilders/annotations"
-rev = "main"
+# The annotations package is tagged by toolchain, like this one.
+rev = "v4.34.0"
 
 [[lean_lib]]
 name = "TrustExtractor"
