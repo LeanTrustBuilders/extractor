@@ -127,6 +127,15 @@ type, its constructors. Everything is pretty-printed by Lean from inside the dec
 namespace, with a bounded number of steps for a body (`⋯` marks what was cut). It is computed in
 parallel chunks; `--no-statements` skips it.
 
+**Hovers.** Each text of the `statement` facet comes with `refs`: for every identifier, operator or
+notation that stands for a constant, its span and the constant's name, read off Lean's own record
+of which subterm each piece of printed text came from (the one the editor's hovers use). Each binder
+also names the head constant of its type. The `signature` facet gives every node's signature as Lean
+prints it, and the `docstring` facet covers upstream nodes too. Together they are what a site needs
+to say, on hover, what `ℕ`, `Kernel` or `∀ᵐ` is. They cost about two thirds more dataset on
+LeanMachineLearning (3.9 MB to 6.4 MB); `--no-refs`, `--no-signatures` and `--no-upstream-docs`
+leave each part out for a consumer that does not show hovers.
+
 ## Build
 
 ```bash
