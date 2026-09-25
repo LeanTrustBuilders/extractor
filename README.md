@@ -51,7 +51,17 @@ Linux's default limit (`vm.max_map_count`, 65,530) allows in one process. So `ex
 project in parts, each in a child process (`extract-part`), and merges them. A part that fails to
 import is split in two and retried; `--parts N` starts with N parts. A declaration's dependencies
 and hashes depend only on what its module imports, and nodes are ordered canonically, so the
-dataset is identical however the work was split: `test/run.sh` checks this. Raising the limit
+dataset does not depend on how the work was split, with one exception. Lean generates some
+auxiliary lemmas on demand (`congr_simp`, equation lemmas), and several modules can each hold their
+own copy, with different proofs. An environment keeps the copy of the first module in its import
+order, which depends on the modules a part imports. So the **content** hash of a declaration whose
+proof rests on such a lemma, its **term** edges, and the module recorded for such a lemma can
+differ between two splits: on Tau Ceti at 8befae0, 4 parts against 8 gave 287 different content
+hashes out of 97,944, 8 different term edges out of 5.9 million, and 4 different modules. The
+meaning and local hashes, the statement and meaning edges, and the facets did not differ. With the
+same split, two extractions are byte-identical, on different machines too (Tau Ceti at 8befae0 on
+a laptop and on a GitHub runner). `meta.json` records the number of parts (`producer.parts`);
+`test/run.sh` checks that the fixture's dataset does not depend on the split. Raising the limit
 (`sudo sysctl -w vm.max_map_count=262144`) lets a large project be extracted in fewer parts.
 
 `trust-extract diagnose-import <private|exported> <Prefix>` reports how many mappings an import
