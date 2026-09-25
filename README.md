@@ -72,7 +72,7 @@ its `typeDeps`, `meaning` its `typeDeps` for a proof and `dataDeps` otherwise, a
 which is only computed when asked for.
 
 On Tau Ceti at 8befae0 (7,432 modules on top of Mathlib; 81,999 declarations), extraction takes
-about four minutes on a 32-core machine with `--parts 4 --jobs 2`, at most 8 GB of memory per
+about 80 seconds on a 32-core machine with `--parts 4 --jobs 2`, at most 8 GB of memory per
 part, and writes 156 MB. Each part reports how long each of its steps takes.
 
 ## The dataset
