@@ -24,6 +24,7 @@ Options for `extract`:
   --jobs <n>           run up to n parts at once (default: 1)
   --no-term            skip the `term` notion, which walks every proof term
   --no-axioms          skip the axioms facet
+  --no-statements      skip the statement facet (each statement taken apart and pretty-printed)
   --skip-module <Module>
                        do not extract this module, typically because it does not build at this
                        commit; every module importing it is skipped too (repeatable). The
@@ -54,6 +55,7 @@ partial def parseOpts (args : List String) (cfg : Config) (extra : List (String 
     | some n => parseOpts rest { cfg with parts := n } extra
     | none => .error s!"--parts expects a number, got `{v}`"
   | "--no-axioms" :: rest => parseOpts rest { cfg with axioms := false } extra
+  | "--no-statements" :: rest => parseOpts rest { cfg with statements := false } extra
   | "--no-term" :: rest => parseOpts rest { cfg with term := false } extra
   | "--jobs" :: v :: rest =>
     match v.toNat? with

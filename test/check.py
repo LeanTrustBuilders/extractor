@@ -51,8 +51,11 @@ def main() -> int:
     check(m["library"]["commit"] == "A" and m["library"]["root"] == "Fixture", "meta: library")
     check(m["hasher"]["local"] == "ltb-local-v1", "meta: local hasher")
     check({e["name"] for e in m["edges"]} == {"statement", "meaning", "term"}, "meta: edge notions")
-    check({"docstring", "source", "axioms", "annotation.claim", "annotation.example_of",
-           "annotation.nonexample_of"} <= {f["name"] for f in m["facets"]}, "meta: facets")
+    check({"docstring", "source", "axioms", "statement", "annotation.claim", "annotation.example_of",
+           "annotation.nonexample_of", "annotation.specifies", "annotation.characterization"}
+          <= {f["name"] for f in m["facets"]}, "meta: facets")
+    check(m["modules"]["count"] == 4 and {p["name"] for p in m["packages"]} >= {"Fixture", "lean4"},
+          "meta: modules and packages")
     check(m["counts"]["project"] + m["counts"]["upstream"] == m["counts"]["nodes"], "meta: counts")
 
     # Nodes and kinds.
@@ -119,10 +122,22 @@ def main() -> int:
     check(src[F + "double"]["start"][0] < src[F + "double"]["end"][0] or True, "A: source range")
     docs = {r["decl"]: r["text"] for r in a["facets"]["docstring"]}
     check(docs.get(F + "double", "").startswith("A definition that version B changes"), "A: docstring")
-    claims = {r["decl"]: r["payload"] for r in a["facets"]["annotation.claim"]}
-    check(claims.get(F + "triple_pos") == {"reference": "Fixture, Theorem 1"}, "A: claim annotation")
-    ex = {r["decl"]: r["payload"] for r in a["facets"]["annotation.example_of"]}
-    check(ex.get(F + "isSmall_three") == {"target": F + "IsSmall"}, "A: example_of annotation")
+    claims = {r["decl"]: r["entries"] for r in a["facets"]["annotation.claim"]}
+    check(claims.get(F + "triple_pos") == [{"reference": "Fixture, Theorem 1"}], "A: claim annotation")
+    ex = {r["decl"]: r["entries"] for r in a["facets"]["annotation.example_of"]}
+    check(ex.get(F + "isSmall_three") == [{"target": F + "IsSmall"}], "A: example_of annotation")
+    # `@[specifies]`, applied twice to one theorem, and a characterization, which also records its
+    # theorems as specifying the definition.
+    specs = {r["decl"]: r["entries"] for r in a["facets"]["annotation.specifies"]}
+    check(specs.get(F + "double_triple") == [{"target": F + "double", "comment": "relates it to `triple`"},
+                                             {"target": F + "triple", "comment": ""}], "A: two specifies on one theorem")
+    check([e["target"] for e in specs.get(F + "isDouble_double", [])] == [F + "double"],
+          "A: a characterization's existence theorem specifies the definition")
+    chars = {r["decl"]: r["entries"] for r in a["facets"]["annotation.characterization"]}
+    check([(e["role"], e["property"], e["target"]) for e in chars.get(F + "IsDouble", [])] ==
+          [("property", F + "IsDouble", F + "double")], "A: characterizing property")
+    check([(e["role"], e["relation"]) for e in chars.get(F + "IsDouble.unique", [])] ==
+          [("uniqueness", "a = b")], "A: uniqueness, with its relation")
     ax = {r["decl"]: r for r in a["facets"]["axioms"]}
     check(ax[F + "triple_pos"]["sorry"] is False, "A: axioms facet")
 

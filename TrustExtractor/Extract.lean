@@ -5,6 +5,7 @@ import TrustExtractor.Util
 import TrustExtractor.Hash
 import TrustExtractor.Source
 import TrustExtractor.Packages
+import TrustExtractor.Statement
 
 /-!
 # Extraction: a compiled project to an S2 dataset
@@ -50,7 +51,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/0"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.3.0"
+def extractorVersion : String := "0.4.0"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
@@ -83,6 +84,8 @@ structure Config where
   /-- Modules not to extract, typically because they do not build at this commit. The modules
   that import them, directly or not, are not extracted either. -/
   skip : Array Name := #[]
+  /-- Whether to compute the `statement` facet (each statement taken apart, pretty-printed). -/
+  statements : Bool := true
 
 /-- The kind of a declaration, as recorded in `decls.jsonl`. -/
 def kindOf (env : Environment) (name : Name) (info : ConstantInfo) : String :=
@@ -208,6 +211,10 @@ structure Part where
   facets : Array (FacetInfo × Array Json)
   /-- The number of modules the part imported. -/
   imported : Nat
+  /-- The requested project modules: name, source path, imports and module docstrings. -/
+  modules : Array Json := #[]
+  /-- Every package the part imported: its name, its modules, and the packages it imports from. -/
+  packages : Array (String × Array String × Array String) := #[]
 deriving Inhabited
 
 def Part.asJson (p : Part) : Json :=
@@ -220,7 +227,10 @@ def Part.asJson (p : Part) : Json :=
     ("facets", Json.arr (p.facets.map fun (f, rows) =>
       Json.mkObj [("name", toJson f.name), ("schema", toJson f.schema),
         ("description", toJson f.description), ("rows", Json.arr rows)])),
-    ("imported", toJson p.imported)]
+    ("imported", toJson p.imported),
+    ("modules", Json.arr p.modules),
+    ("packages", Json.arr (p.packages.map fun (n, ms, rs) =>
+      Json.mkObj [("name", toJson n), ("modules", toJson ms), ("requires", toJson rs)]))]
 
 def Part.ofJson (j : Json) : Except String Part := do
   let nodes ← (← j.getObjValAs? (Array Json) "nodes").mapM NodeInfo.ofJson
@@ -232,7 +242,18 @@ def Part.ofJson (j : Json) : Except String Part := do
     return ({ name := ← f.getObjValAs? String "name", schema := ← f.getObjValAs? String "schema"
               description := ← f.getObjValAs? String "description" },
             ← f.getObjValAs? (Array Json) "rows")
-  return { nodes, owned, edges, facets, imported := ← j.getObjValAs? Nat "imported" }
+  let modules ← j.getObjValAs? (Array Json) "modules"
+  let packages ← (← j.getObjValAs? (Array Json) "packages").mapM fun q => do
+    return (← q.getObjValAs? String "name", ← q.getObjValAs? (Array String) "modules",
+      ← q.getObjValAs? (Array String) "requires")
+  return { nodes, owned, edges, facets, imported := ← j.getObjValAs? Nat "imported", modules, packages }
+
+/-- `path` relative to the directory `cwd`, as the dataset records source paths. -/
+def relativePath (cwd path : System.FilePath) : String :=
+  let s := path.toString
+  let c := cwd.toString ++ "/"
+  if s.startsWith c then (s.drop c.length).toString
+  else if s.startsWith "./" then (s.drop 2).toString else s
 
 /-- Collects one part: imports `mods` and reports on the project declarations of those modules.
 The caller must have run `enableInitializersExecution`, so that the imported modules' extensions
@@ -339,11 +360,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
         pure f
     let some (text, path) := file? | continue
     let pos := text.toFileMap.ofPosition range.range.pos
-    let relPath :=
-      let s := path.toString
-      let c := cwd.toString ++ "/"
-      if s.startsWith c then (s.drop c.length).toString
-      else if s.startsWith "./" then (s.drop 2).toString else s
+    let relPath := relativePath cwd path
     let loc : SourceLoc := {
       path := relPath
       startLine := range.range.pos.line, startCol := range.range.charUtf16
@@ -366,18 +383,61 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
         is among them", rows)
     progress t0 "axioms facet"
 
+  if cfg.statements then
+    let rows ← statementRows env ((ownedInfos.zip ownedProp).map fun ((n, i), p) => (n, i, p))
+    facets := facets.push (facetInfo "statement" "statement/1" "the declaration's statement taken \
+        apart: its binders (name, pretty-printed type, role: type, variable, hypothesis or \
+        instance), the conclusion under them, and for a definition its body, for a structure its \
+        fields, for another inductive type its constructors; pretty-printed by Lean, `⋯` marking \
+        what a bounded printer cut", rows)
+    progress t0 "statement facet"
+
   -- Annotations on any node. Several parts may report the same one; the merge keeps one copy.
   let nodeSet : Std.HashSet Name := nodeNames.foldl (·.insert ·) {}
   let entries := (TrustAnnotations.entries env).filter (nodeSet.contains ·.decl)
   let attrs := (entries.map (·.attr)).toList.eraseDups.toArray
   for attr in attrs do
-    let rows := (entries.filter (·.attr == attr)).map fun e =>
-      Json.mkObj [("decl", toJson e.decl.toString),
-        ("payload", (Json.parse e.payload).toOption.getD (toJson e.payload))]
-    facets := facets.push (facetInfo s!"annotation.{attr}" "annotation/1"
-      s!"`@[{attr}]` annotations recorded in the TrustAnnotations extension", rows)
+    -- One row per declaration: an attribute may be applied to it more than once
+    -- (`@[specifies f, specifies g]`).
+    let ofAttr := entries.filter (·.attr == attr)
+    let decls := (ofAttr.map (·.decl)).toList.eraseDups.toArray
+    let rows := decls.map fun d => Json.mkObj [("decl", toJson d.toString),
+      ("entries", Json.arr ((ofAttr.filter (·.decl == d)).map fun e =>
+        (Json.parse e.payload).toOption.getD (toJson e.payload)))]
+    facets := facets.push (facetInfo s!"annotation.{attr}" "annotation/2"
+      s!"`@[{attr}]` annotations recorded in the TrustAnnotations extension: for each declaration, \
+        the payload of each application, in order", rows)
 
-  return { nodes, owned, edges, facets, imported := env.header.moduleNames.size }
+  -- Modules: the requested project modules, with their imports and module docstrings.
+  let mut moduleRows : Array Json := #[]
+  for mod in mods do
+    let some idx := env.getModuleIdx? mod | continue
+    let imports := (env.header.moduleData[idx.toNat]!.imports.map (·.module.toString)).toList.eraseDups.toArray
+    let docs := ((getModuleDoc? env mod).getD #[]).map (·.doc)
+    let path ← match ← findSource? cfg.srcDirs mod with
+      | some p => pure (relativePath cwd p)
+      | none => pure ""
+    moduleRows := moduleRows.push (Json.mkObj [("name", toJson mod.toString), ("path", toJson path),
+      ("imports", toJson imports), ("doc", toJson docs)])
+
+  -- Packages: every imported module's package, and which packages import from which.
+  let modNames := env.header.moduleNames
+  let mut pkgModules : Std.HashMap String (Array String) := {}
+  let mut pkgRequires : Std.HashMap String (Std.HashSet String) := {}
+  for h : i in [0:modNames.size] do
+    let m := modNames[i]
+    let pkg ← packageOf search pkgCache m
+    pkgModules := pkgModules.insert pkg ((pkgModules.getD pkg #[]).push m.toString)
+    for imp in env.header.moduleData[i]!.imports do
+      let other ← packageOf search pkgCache imp.module
+      if other != pkg then
+        pkgRequires := pkgRequires.insert pkg ((pkgRequires.getD pkg {}).insert other)
+  let packages := pkgModules.toArray.map fun (p, ms) =>
+    (p, ms, ((pkgRequires.getD p {}).toArray.qsort (· < ·)))
+
+  return { nodes, owned, edges, facets, imported := env.header.moduleNames.size,
+           modules := moduleRows, packages }
+
 
 /-! ## Merging parts into a dataset -/
 
@@ -478,6 +538,26 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
       ("file", toJson file), ("schema", toJson info.schema), ("count", toJson rows.size),
       ("description", toJson info.description)]
 
+  -- Modules: one row per extracted project module, sorted by name.
+  let mut moduleRows : Std.HashMap String Json := {}
+  for p in parts do
+    for m in p.modules do
+      if let .ok n := m.getObjValAs? String "name" then
+        if !moduleRows.contains n then moduleRows := moduleRows.insert n m
+  let moduleList := (moduleRows.toArray.qsort (·.1 < ·.1)).map (·.2)
+  writeJsonl (cfg.out / "modules.jsonl") moduleList
+
+  -- Packages: the union of what the parts imported.
+  let mut pkgModules : Std.HashMap String (Std.HashSet String) := {}
+  let mut pkgRequires : Std.HashMap String (Std.HashSet String) := {}
+  for p in parts do
+    for (n, ms, rs) in p.packages do
+      pkgModules := pkgModules.insert n (ms.foldl (·.insert ·) (pkgModules.getD n {}))
+      pkgRequires := pkgRequires.insert n (rs.foldl (·.insert ·) (pkgRequires.getD n {}))
+  let packagesJson := (pkgModules.toArray.qsort (·.1 < ·.1)).map fun (n, ms) =>
+    Json.mkObj [("name", toJson n), ("modules", toJson ms.size),
+      ("requires", toJson ((pkgRequires.getD n {}).toArray.qsort (· < ·)))]
+
   let metaJson := Json.mkObj [
     ("spec", toJson datasetSpec),
     -- The number of parts the work was split into: besides the code and the extractor's version,
@@ -495,6 +575,8 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
       ("content", toJson "proof-relevant"), ("local", toJson localHasherName)]),
     ("counts", Json.mkObj [("nodes", toJson nodes.size), ("project", toJson projectNodes.size),
       ("upstream", toJson upstreamNodes.size)]),
+    ("modules", Json.mkObj [("file", toJson "modules.jsonl"), ("count", toJson moduleList.size)]),
+    ("packages", Json.arr packagesJson),
     ("edges", toJson edgeEntries),
     ("facets", toJson facetEntries)]
   IO.FS.writeFile (cfg.out / "meta.json") (metaJson.pretty ++ "\n")
@@ -515,6 +597,7 @@ partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Nam
   let srcArgs := cfg.srcDirs.foldl (fun a d => a ++ #["--src-dir", d.toString]) #[]
   let args := #["extract-part", "--root", cfg.root.toString, "--modules-file", modsFile.toString,
       "--part-out", outFile.toString] ++ srcArgs ++ (if cfg.axioms then #[] else #["--no-axioms"]) ++
+    (if cfg.statements then #[] else #["--no-statements"]) ++
     (if cfg.term then #[] else #["--no-term"])
   progress t0 s!"part {label}: {mods.size} modules"
   let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args, stdin := .null }
