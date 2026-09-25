@@ -67,9 +67,9 @@ exponential on values that share subterms (a part of Tau Ceti never finished), s
 builds that table itself, visiting each subterm once; `--check-deps` compares it with
 MeaningGraph's.
 
-On Tau Ceti (7,010 modules on top of Mathlib; 77,758 declarations), extraction takes about six
-minutes on a 32-core machine with `--parts 4 --jobs 2`, at most 8 GB of memory per part, and writes
-147 MB.
+On Tau Ceti at 8befae0 (7,432 modules on top of Mathlib; 81,999 declarations), extraction takes
+about four minutes on a 32-core machine with `--parts 4 --jobs 2`, at most 8 GB of memory per
+part, and writes 156 MB. Each part reports how long each of its steps takes.
 
 ## The dataset
 
