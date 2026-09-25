@@ -1,0 +1,44 @@
+name: Release
+
+# A release is cut per Lean toolchain: the tag names the toolchain the binary reads `.olean` files
+# of (`v4.34.0-rc2`, optionally with a suffix: `v4.34.0-rc2-1`).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: true
+      - name: The tag names the pinned toolchain
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          python3 scripts/check-pins.py "$(sed 's/.*:v//' lean-toolchain)"
+          case "$tag" in "$(sed 's/.*:v//' lean-toolchain)"*) ;; *) echo "tag $tag does not name $(cat lean-toolchain)"; exit 1;; esac
+      - name: Fixture test
+        run: test/run.sh
+      - name: Package
+        run: |
+          mkdir -p dist/trust-extract
+          cp .lake/build/bin/trust-extract lean-toolchain LICENSE README.md dist/trust-extract/
+          tar -C dist -czf trust-extract-linux-x86_64.tar.gz trust-extract
+          sha256sum trust-extract-linux-x86_64.tar.gz > SHA256SUMS
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" trust-extract-linux-x86_64.tar.gz SHA256SUMS \
+            --title "trust-extract for $(cat lean-toolchain)" \
+            --notes "trust-extract built for \`$(cat lean-toolchain)\`. Run it under \`lake env\` in a project on the same toolchain." \
+            || gh release upload "$GITHUB_REF_NAME" trust-extract-linux-x86_64.tar.gz SHA256SUMS --clobber

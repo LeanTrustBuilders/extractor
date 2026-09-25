@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          # `lake update` must not run: it rewrites lean-toolchain to a dependency's.
+          auto-config: false
+          build: true
+      - name: Recorded pins agree with the build
+        run: python3 scripts/check-pins.py
+      - name: The binary reports the pinned toolchain
+        run: |
+          ./.lake/build/bin/trust-extract version
+          want="$(sed 's/.*:v//' lean-toolchain)"
+          ./.lake/build/bin/trust-extract version | grep -q "Lean $want\$"
+      - name: Two-version fixture
+        run: test/run.sh

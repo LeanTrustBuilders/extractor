@@ -1,0 +1,11 @@
+name = "Fixture"
+defaultTargets = ["Fixture"]
+
+[[require]]
+name = "TrustAnnotations"
+git = "https://github.com/LeanTrustBuilders/annotations"
+rev = "main"
+
+[[lean_lib]]
+name = "Fixture"
+globs = ["Fixture.*"]

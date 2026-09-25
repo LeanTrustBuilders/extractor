@@ -1,0 +1,41 @@
+name = "TrustExtractor"
+version = "0.1.0"
+defaultTargets = ["trust-extract"]
+
+# Dependency analysis: the notions of dependency (statement, meaning, term) come from here.
+# The tag matching the Lean release; this package pins the release candidate its target projects
+# use, and the tagged source builds on it.
+[[require]]
+name = "MeaningGraph"
+git = "https://github.com/RemyDegenne/meaning-graph"
+rev = "v4.34.0"
+
+# Rename-invariant structural hashes: the meaning and content hashes of the declaration key.
+# Pinned exactly, because a stored review is only checkable if the hash it records can be
+# recomputed: this moves when the hash is meant to move, not when a toolchain does.
+[[require]]
+name = "semantic_hash"
+git = "https://github.com/mathlib-initiative/semantic_hash"
+rev = "0496f6d7b650cb03c9ffc61089ffd400dfd98564"
+
+# The flat printer, used by `trust-extract selfcheck` as an independent computation of the
+# meaning closure.
+[[require]]
+name = "ChallengeGen"
+git = "https://github.com/RemyDegenne/challenge-gen"
+rev = "v4.34.0"
+
+# The generic annotation extension: linked so that its imported entries are read, and exported
+# as one facet per attribute.
+[[require]]
+name = "TrustAnnotations"
+git = "https://github.com/LeanTrustBuilders/annotations"
+rev = "main"
+
+[[lean_lib]]
+name = "TrustExtractor"
+
+[[lean_exe]]
+name = "trust-extract"
+root = "Main"
+supportInterpreter = true
