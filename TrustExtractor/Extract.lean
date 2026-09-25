@@ -52,7 +52,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/0"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.2.1"
+def extractorVersion : String := "0.2.2"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
@@ -509,7 +509,10 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
 
   let metaJson := Json.mkObj [
     ("spec", toJson datasetSpec),
-    ("producer", Json.mkObj [("name", toJson "trust-extract"), ("version", toJson extractorVersion)]),
+    -- The number of parts the work was split into: besides the code and the extractor's version,
+    -- the one thing a dataset can depend on (see the README).
+    ("producer", Json.mkObj [("name", toJson "trust-extract"), ("version", toJson extractorVersion),
+      ("parts", toJson parts.size)]),
     ("library", Json.mkObj [("root", toJson cfg.root.toString), ("package", toJson project),
       ("repo", toJson cfg.repo), ("commit", toJson commit), ("dirty", toJson dirty),
       ("modules", toJson mods.size),
