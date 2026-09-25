@@ -21,6 +21,9 @@ Options for `extract`:
   --parts <n>          split the work into n parts from the start (default: 1). A part that
                        cannot import its modules, typically because the process runs out of
                        memory mappings (vm.max_map_count), is split in two and retried
+  --jobs <n>           run up to n parts at once (default: 1)
+  --no-term            skip the `term` notion, which walks every proof term
+  --check-deps         check the dependencies against MeaningGraph's own computation (slow)
   --no-axioms          skip the axioms facet
 
 Diagnostics:
@@ -45,6 +48,12 @@ partial def parseOpts (args : List String) (cfg : Config) (extra : List (String 
     | some n => parseOpts rest { cfg with parts := n } extra
     | none => .error s!"--parts expects a number, got `{v}`"
   | "--no-axioms" :: rest => parseOpts rest { cfg with axioms := false } extra
+  | "--no-term" :: rest => parseOpts rest { cfg with term := false } extra
+  | "--check-deps" :: rest => parseOpts rest { cfg with checkDeps := true } extra
+  | "--jobs" :: v :: rest =>
+    match v.toNat? with
+    | some n => parseOpts rest { cfg with jobs := n } extra
+    | none => .error s!"--jobs expects a number, got `{v}`"
   | "--modules-file" :: v :: rest => parseOpts rest cfg (("modules-file", v) :: extra)
   | "--part-out" :: v :: rest => parseOpts rest cfg (("part-out", v) :: extra)
   | a :: _ => .error s!"unknown argument `{a}`"

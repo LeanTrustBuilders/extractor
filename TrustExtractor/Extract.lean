@@ -5,6 +5,7 @@ import TrustExtractor.Util
 import TrustExtractor.Hash
 import TrustExtractor.Source
 import TrustExtractor.Packages
+import TrustExtractor.Deps
 
 /-!
 # Extraction: a compiled project to an S2 dataset
@@ -76,6 +77,12 @@ structure Config where
   axioms : Bool := true
   /-- The number of parts to start with; a part that runs out of memory mappings is split. -/
   parts : Nat := 1
+  /-- How many parts to run at once. -/
+  jobs : Nat := 1
+  /-- Whether to compute the `term` notion, which walks every proof term. -/
+  term : Bool := true
+  /-- Whether to check the dependencies against MeaningGraph's own `Context.declDeps`. -/
+  checkDeps : Bool := false
 
 /-- The kind of a declaration, as recorded in `decls.jsonl`. -/
 def kindOf (env : Environment) (name : Name) (info : ConstantInfo) : String :=
@@ -219,34 +226,67 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
     | some idx => env.header.moduleNames[idx.toNat]!
     | none => .anonymous
 
-  -- Dependencies, for the project declarations of the requested modules.
+  -- The project declarations of the requested modules, in module order.
   let ctx := MeaningGraph.Context.of env cfg.root
-  let ctx ← runMetaM env ctx.withDataValueConsts
-  let deps := ctx.allDeclDeps.filter fun (n, _) => requested.contains (moduleOf n)
-  progress t0 s!"dependencies of {deps.size} project declarations"
-
-  -- Positions in the module constant tables, for the canonical order of project nodes.
+  progress t0 s!"dependency tables: {ctx.constants.size} project constants, {ctx.exposed.size} exposed"
   let mut positions : Std.HashMap Name Nat := {}
-  for (name, mod, _) in ctx.constants do
+  let mut ownedInfos : Array (Name × ConstantInfo) := #[]
+  for (name, mod, info) in ctx.constants do
     if requested.contains mod then
       positions := positions.insert name positions.size
+      if ctx.exposed.contains name then ownedInfos := ownedInfos.push (name, info)
+  let owned := ownedInfos.map (·.1)
+  let ownedProp ← runMetaM env do
+    ownedInfos.mapM fun (_, info) => do
+      if info matches .thmInfo _ then return true
+      try Meta.isProp info.type catch _ => return false
 
-  -- Nodes: the owned declarations, and the targets of their statement and data edges.
-  let owned := deps.map (·.1)
+  -- The data of the owned definitions' values, proofs skipped.
+  let dataValues ← runMetaM env do
+    let mut m : Std.HashMap Name (Array Name) := {}
+    for (name, info) in ownedInfos do
+      if info matches .defnInfo _ then
+        m := m.insert name (← MeaningGraph.dataValueConstants info)
+    return m
+  let ctx := { ctx with dataValueConsts := dataValues }
+  progress t0 s!"data values of {dataValues.size} definitions"
+
+  -- Dependencies.
+  let targets := (Array.range ownedInfos.size).map fun i =>
+    (ownedInfos[i]!.1, ownedInfos[i]!.2, ownedProp[i]!)
+  let deps ← depsOf ctx targets cfg.term
+  progress t0 s!"dependencies of {deps.size} project declarations"
+  if cfg.checkDeps then
+    let mut cache : MeaningGraph.Cache := {}
+    let mut mismatches := 0
+    for h : i in [0:deps.size] do
+      let (name, d) := deps[i]
+      let (ref, cache') := ctx.declDeps cache name ownedInfos[i]!.2
+      cache := cache'
+      let refMeaning := if ownedProp[i]! then ref.typeDeps else ref.dataDeps
+      let same (a b : Array Name) := a.qsort (·.toString < ·.toString) == b.qsort (·.toString < ·.toString)
+      unless same d.statement ref.typeDeps && same d.meaning refMeaning &&
+          (!cfg.term || same d.term ref.deps) do
+        mismatches := mismatches + 1
+        IO.eprintln s!"dependencies of {name} differ from MeaningGraph's"
+    if mismatches > 0 then
+      throw <| IO.userError s!"{mismatches} declarations' dependencies differ from MeaningGraph's"
+    progress t0 "dependencies agree with MeaningGraph's"
+
+  -- Nodes: the owned declarations, and the targets of their statement and meaning edges.
   let ownedSet : Std.HashSet Name := owned.foldl (·.insert ·) {}
   let mut others : Std.HashSet Name := {}
   for (_, d) in deps do
-    for dep in d.typeDeps ++ d.dataDeps do
+    for dep in d.statement ++ d.meaning do
       if !ownedSet.contains dep && env.contains dep then others := others.insert dep
-  let nodeNames := owned ++ others.toArray
-  let infos := nodeNames.filterMap fun n => (env.find? n).map (n, ·)
-
-  let isProp ← runMetaM env do
-    infos.mapM fun (_, info) => do
+  let otherInfos := others.toArray.filterMap fun n => (env.find? n).map (n, ·)
+  let otherProp ← runMetaM env do
+    otherInfos.mapM fun (_, info) => do
       if info matches .thmInfo _ then return true
       try Meta.isProp info.type catch _ => return false
-  let isPropOf : Std.HashMap Name Bool :=
-    (Array.range infos.size).foldl (fun m i => m.insert infos[i]!.1 isProp[i]!) {}
+  let infos := ownedInfos ++ otherInfos
+  let isProp := ownedProp ++ otherProp
+  let nodeNames := infos.map (·.1)
   let hashes ← SemanticHash.Hashing.runBoth env
   progress t0 "semantic hashes"
   let search ← labelledSearchPath project
@@ -265,9 +305,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
       localHash := hex16 (← (localHash env info : IO UInt64)) }
 
   -- Edges, by name.
-  let edges := deps.map fun (n, d) =>
-    let meaningTargets := if isPropOf.getD n false then d.typeDeps else d.dataDeps
-    (n, #[d.typeDeps, meaningTargets, d.deps])
+  let edges := deps.map fun (n, d) => (n, #[d.statement, d.meaning, d.term])
 
   -- Facets.
   let mut facets : Array (FacetInfo × Array Json) := #[]
@@ -392,6 +430,7 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
   let mut edgeEntries : Array Json := #[]
   for h : k in [0:notionNames.size] do
     let notion := notionNames[k]
+    if notion == "term" && !cfg.term then continue
     let mut buf : ByteArray := .empty
     let mut count := 0
     for n in projectNodes do
@@ -466,7 +505,8 @@ partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Nam
   IO.FS.writeFile modsFile ("\n".intercalate (mods.toList.map toString))
   let srcArgs := cfg.srcDirs.foldl (fun a d => a ++ #["--src-dir", d.toString]) #[]
   let args := #["extract-part", "--root", cfg.root.toString, "--modules-file", modsFile.toString,
-      "--part-out", outFile.toString] ++ srcArgs ++ (if cfg.axioms then #[] else #["--no-axioms"])
+      "--part-out", outFile.toString] ++ srcArgs ++ (if cfg.axioms then #[] else #["--no-axioms"]) ++
+    (if cfg.term then #[] else #["--no-term"]) ++ (if cfg.checkDeps then #["--check-deps"] else #[])
   progress t0 s!"part {label}: {mods.size} modules"
   let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args, stdin := .null }
   let code ← child.wait
@@ -495,11 +535,16 @@ def extract (cfg : Config) : IO Unit := do
   IO.FS.createDirAll workDir
   let n := max 1 (min cfg.parts mods.size)
   let size := (mods.size + n - 1) / n
+  let chunks := (Array.range n).map (fun i => (i, mods.extract (i * size) ((i + 1) * size)))
+    |>.filter (!·.2.isEmpty)
+  -- Up to `jobs` parts at a time, each in its own child process.
   let mut parts : Array Part := #[]
-  for i in [0:n] do
-    let chunk := mods.extract (i * size) ((i + 1) * size)
-    if !chunk.isEmpty then
-      parts := parts ++ (← runPart cfg workDir chunk s!"{i}" t0)
+  let jobs := max 1 cfg.jobs
+  for w in [0:(chunks.size + jobs - 1) / jobs] do
+    let wave := chunks.extract (w * jobs) ((w + 1) * jobs)
+    let tasks ← wave.mapM fun (i, chunk) => IO.asTask (runPart cfg workDir chunk s!"{i}" t0)
+    for t in tasks do
+      parts := parts ++ (← IO.ofExcept t.get)
   try IO.FS.removeDirAll workDir catch _ => pure ()
   writeDataset cfg parts mods project t0
 

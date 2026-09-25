@@ -39,6 +39,15 @@ dataset is identical however the work was split: `test/run.sh` checks this. Rais
 `trust-extract diagnose-import <private|exported> <Prefix>` reports how many mappings an import
 takes.
 
+Other options: `--jobs N` runs up to N parts at once; `--no-term` skips the `term` notion, which walks
+every proof term; `--check-deps` checks every declaration's dependencies against MeaningGraph's own
+`Context.declDeps` (the extractor computes them with its own driver, which gives the same lists but
+skips proofs unless `term` is asked for, deduplicates with hash sets, and runs in parallel).
+
+On Tau Ceti (7,010 modules on top of Mathlib; 77,758 declarations), extraction takes about six
+minutes on a 32-core machine with `--parts 4 --jobs 2`, at most 8 GB of memory per part, and writes
+147 MB.
+
 ## The dataset
 
 ```
