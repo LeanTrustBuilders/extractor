@@ -51,7 +51,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/0"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.1.0"
+def extractorVersion : String := "0.2.0"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
@@ -83,6 +83,9 @@ structure Config where
   term : Bool := true
   /-- Whether to check the dependencies against MeaningGraph's own `Context.declDeps`. -/
   checkDeps : Bool := false
+  /-- Modules not to extract, typically because they do not build at this commit. The modules
+  that import them, directly or not, are not extracted either. -/
+  skip : Array Name := #[]
 
 /-- The kind of a declaration, as recorded in `decls.jsonl`. -/
 def kindOf (env : Environment) (name : Name) (info : ConstantInfo) : String :=
@@ -117,6 +120,29 @@ def discoverModules (srcDirs : Array System.FilePath) (root : Name) : IO (Array 
     let rootDir := dir / System.mkFilePath (root.components.map toString)
     if ← rootDir.isDir then mods := mods ++ (← discoverUnder rootDir root)
   return (mods.qsort (·.toString < ·.toString)).toList.eraseDups.toArray
+
+/-- The modules among `mods` that are in `skip` or import one of them, directly or not, sorted.
+A module that does not build takes down every module importing it, and Lake's report of failed
+targets names only the modules that failed, not those it did not try. Imports are read from the
+source headers, without importing anything. -/
+def withImporters (srcDirs : Array System.FilePath) (mods : Array Name) (skip : Array Name) :
+    IO (Array Name) := do
+  let mut importers : Std.HashMap Name (Array Name) := {}
+  for m in mods do
+    let some path ← findSource? srcDirs m | continue
+    let header ← parseImports' (← IO.FS.readFile path) path.toString
+    for i in header.imports do
+      importers := importers.insert i.module ((importers.getD i.module #[]).push m)
+  let known : Std.HashSet Name := mods.foldl (·.insert ·) {}
+  let mut out : Std.HashSet Name := {}
+  let mut todo := skip
+  while !todo.isEmpty do
+    let m := todo.back!
+    todo := todo.pop
+    if out.contains m then continue
+    out := out.insert m
+    todo := todo ++ importers.getD m #[]
+  return out.toArray.filter known.contains |>.qsort (·.toString < ·.toString)
 
 /-! ## One part -/
 
@@ -378,7 +404,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
 
 /-- Merges parts and writes the dataset. -/
 def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (project : String)
-    (t0 : Nat) : IO Unit := do
+    (unavailable : Array Name) (t0 : Nat) : IO Unit := do
   let commit ← if cfg.commit.isEmpty then
       pure ((← commandOutput? "git" #["rev-parse", "HEAD"]).getD "")
     else pure cfg.commit
@@ -478,7 +504,8 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
     ("producer", Json.mkObj [("name", toJson "trust-extract"), ("version", toJson extractorVersion)]),
     ("library", Json.mkObj [("root", toJson cfg.root.toString), ("package", toJson project),
       ("repo", toJson cfg.repo), ("commit", toJson commit), ("dirty", toJson dirty),
-      ("modules", toJson mods.size)]),
+      ("modules", toJson mods.size),
+      ("unavailable", toJson (unavailable.map toString))]),
     ("toolchain", toJson toolchain),
     ("lean", Json.mkObj [("version", toJson Lean.versionString), ("githash", toJson Lean.githash)]),
     ("hasher", Json.mkObj [("name", toJson "semantic_hash"),
@@ -527,9 +554,14 @@ partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Nam
 /-- Extracts the dataset: runs the parts in child processes and merges them. -/
 def extract (cfg : Config) : IO Unit := do
   let t0 ← IO.monoMsNow
-  let mods ← if cfg.modules.isEmpty then discoverModules cfg.srcDirs cfg.root else pure cfg.modules
-  if mods.isEmpty then
+  let found ← if cfg.modules.isEmpty then discoverModules cfg.srcDirs cfg.root else pure cfg.modules
+  if found.isEmpty then
     throw <| IO.userError s!"no modules found under the prefix `{cfg.root}` in {cfg.srcDirs}"
+  let unavailable ← if cfg.skip.isEmpty then pure #[] else withImporters cfg.srcDirs found cfg.skip
+  if !unavailable.isEmpty then
+    progress t0 s!"skipping {unavailable.size} modules: {cfg.skip.size} named, and those importing them"
+  let skipped : Std.HashSet Name := unavailable.foldl (·.insert ·) {}
+  let mods := found.filter (!skipped.contains ·)
   let project := if cfg.project.isEmpty then cfg.root.toString else cfg.project
   let workDir := cfg.out.withFileName (cfg.out.fileName.getD "dataset" ++ ".parts")
   IO.FS.createDirAll workDir
@@ -546,7 +578,7 @@ def extract (cfg : Config) : IO Unit := do
     for t in tasks do
       parts := parts ++ (← IO.ofExcept t.get)
   try IO.FS.removeDirAll workDir catch _ => pure ()
-  writeDataset cfg parts mods project t0
+  writeDataset cfg parts mods project unavailable t0
 
 /-- The `extract-part` subcommand: collects one part and writes it as JSON. Exits with
 `importFailedExit` when importing fails, so that the caller splits the part. -/

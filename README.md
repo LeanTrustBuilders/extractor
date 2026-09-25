@@ -25,7 +25,25 @@ lake env /path/to/trust-extract extract --root MyProject --repo owner/name --out
 ```
 
 The project and the extractor must use the same Lean toolchain: a `.olean` file can only be read by
-the Lean that wrote it. Releases are tagged by toolchain (`v4.34.0-rc2`, …).
+the Lean that wrote it. Releases are tagged by extractor version and toolchain:
+`v0.2.0-lean-v4.34.0-rc2` is trust-extract 0.2.0 for `leanprover/lean4:v4.34.0-rc2` (the first release
+was tagged `v4.34.0-rc2`). Take the newest release whose tag ends with `-lean-<your toolchain>`.
+
+**Extract from a clean build.** The extractor reads the `.olean` files as they are and cannot tell
+whether they are consistent with each other. A build directory that has gone through several
+commits can hold a module compiled against an older version of one of its imports, and Lake may
+count it as up to date. For a dataset that others will use, start from an empty `.lake/build`, as
+CI does: fetch the project's cache, then build what it lacks.
+
+**Modules that do not build.** `--skip-module M` (repeatable) or `--skip-modules-file FILE` leaves
+modules out, typically those that fail to build at the commit, and with them every module importing
+them, since Lake's report of failures names only the modules it tried. The dataset lists them all
+in `meta.json`, under `library.unavailable`, so that a review of one of their declarations reads as
+*unavailable* rather than as deleted. After a build, the failures are
+
+```bash
+lake build --no-build 2>&1 | sed -n '/logged failures/,$s/^- //p'
+```
 
 **Large projects are extracted in parts.** Every imported module maps several files into memory,
 and a project the size of Tau Ceti on top of Mathlib (about 15,000 modules) needs more mappings than

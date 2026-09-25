@@ -25,6 +25,13 @@ Options for `extract`:
   --no-term            skip the `term` notion, which walks every proof term
   --check-deps         check the dependencies against MeaningGraph's own computation (slow)
   --no-axioms          skip the axioms facet
+  --skip-module <Module>
+                       do not extract this module, typically because it does not build at this
+                       commit; every module importing it is skipped too (repeatable). The
+                       dataset lists the skipped modules in meta.json (`library.unavailable`)
+  --skip-modules-file <file>
+                       the same, one module per line, e.g. the failures Lake reports:
+                         lake build --no-build 2>&1 | sed -n '/logged failures/,$s/^- //p'
 
 Diagnostics:
   lake env trust-extract diagnose-import <private|server|exported> <Prefix | Module...>
@@ -54,6 +61,8 @@ partial def parseOpts (args : List String) (cfg : Config) (extra : List (String 
     match v.toNat? with
     | some n => parseOpts rest { cfg with jobs := n } extra
     | none => .error s!"--jobs expects a number, got `{v}`"
+  | "--skip-module" :: v :: rest => parseOpts rest { cfg with skip := cfg.skip.push v.toName } extra
+  | "--skip-modules-file" :: v :: rest => parseOpts rest cfg (("skip-modules-file", v) :: extra)
   | "--modules-file" :: v :: rest => parseOpts rest cfg (("modules-file", v) :: extra)
   | "--part-out" :: v :: rest => parseOpts rest cfg (("part-out", v) :: extra)
   | a :: _ => .error s!"unknown argument `{a}`"
@@ -66,11 +75,15 @@ unsafe def main (args : List String) : IO UInt32 := do
   | "extract" :: rest =>
     match parseOpts rest { root := .anonymous } [] with
     | .error e => IO.eprintln s!"{e}\n\n{usage}"; return 2
-    | .ok (cfg, _) =>
+    | .ok (cfg, extra) =>
       if cfg.root.isAnonymous then
         IO.eprintln s!"--root is required\n\n{usage}"; return 2
       try
-        extract cfg
+        let listed ← match extra.lookup "skip-modules-file" with
+          | some f => pure (((← IO.FS.readFile f).splitOn "\n").map (·.trimAscii.toString)
+              |>.filter (!·.isEmpty) |>.map (·.toName) |>.toArray)
+          | none => pure #[]
+        extract { cfg with skip := cfg.skip ++ listed }
         return 0
       catch e =>
         IO.eprintln s!"error: {e}"; return 1

@@ -4,10 +4,12 @@
 # Builds test/fixture (version A), extracts it twice (the dataset must be identical both times),
 # overlays test/fixture-b (version B), extracts again, and runs test/check.py on the two datasets:
 # it checks the nodes, kinds, edges, facets, and how each hash of the declaration key moves
-# between A and B.
+# between A and B. Last, extracts B again as if `Fixture.Uses` did not build: that module and the
+# root, which imports it, must be listed as unavailable, and nothing else may change.
 #
 # Usage: test/run.sh [KEEP_DIR]   (after `lake build` of the extractor)
-#   With KEEP_DIR, the two datasets are copied to KEEP_DIR/fixture-a and KEEP_DIR/fixture-b.
+#   With KEEP_DIR, the datasets are copied to KEEP_DIR/fixture-a, KEEP_DIR/fixture-b and
+#   KEEP_DIR/fixture-b-partial.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -43,10 +45,14 @@ cp -r "$here/fixture-b/." "$work/b/"
 
 python3 "$here/check.py" "$work/out-a" "$work/out-b"
 
+(cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b-partial" --commit B --repo test/fixture --skip-module Fixture.Uses)
+python3 "$here/check_partial.py" "$work/out-b" "$work/out-b-partial"
+
 if [ $# -ge 1 ]; then
   mkdir -p "$1"
-  rm -rf "$1/fixture-a" "$1/fixture-b"
+  rm -rf "$1/fixture-a" "$1/fixture-b" "$1/fixture-b-partial"
   cp -r "$work/out-a" "$1/fixture-a"
   cp -r "$work/out-b" "$1/fixture-b"
+  cp -r "$work/out-b-partial" "$1/fixture-b-partial"
   echo "kept the datasets in $1"
 fi

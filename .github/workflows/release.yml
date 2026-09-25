@@ -19,12 +19,15 @@ jobs:
         with:
           auto-config: false
           build: true
-      - name: The tag names the pinned toolchain
+      - name: The tag names the version and the pinned toolchain
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          python3 scripts/check-pins.py "$(sed 's/.*:v//' lean-toolchain)"
-          case "$tag" in "$(sed 's/.*:v//' lean-toolchain)"*) ;; *) echo "tag $tag does not name $(cat lean-toolchain)"; exit 1;; esac
+          toolchain=$(sed 's/.*:v//' lean-toolchain)
+          version=$(sed -n 's/^def extractorVersion : String := "\(.*\)"$/\1/p' TrustExtractor/Extract.lean)
+          python3 scripts/check-pins.py "$toolchain"
+          # Tags are v<extractor version>-lean-v<toolchain>, e.g. v0.2.0-lean-v4.34.0-rc2.
+          [ "$GITHUB_REF_NAME" = "v$version-lean-v$toolchain" ] || {
+            echo "tag $GITHUB_REF_NAME should be v$version-lean-v$toolchain"; exit 1; }
       - name: Fixture test
         run: test/run.sh
       - name: Package
@@ -39,6 +42,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" trust-extract-linux-x86_64.tar.gz SHA256SUMS \
-            --title "trust-extract for $(cat lean-toolchain)" \
+            --title "trust-extract ${GITHUB_REF_NAME%%-lean-*} for $(cat lean-toolchain)" \
             --notes "trust-extract built for \`$(cat lean-toolchain)\`. Run it under \`lake env\` in a project on the same toolchain." \
             || gh release upload "$GITHUB_REF_NAME" trust-extract-linux-x86_64.tar.gz SHA256SUMS --clobber
