@@ -51,7 +51,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/0"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.4.0"
+def extractorVersion : String := "0.5.0"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
@@ -86,6 +86,12 @@ structure Config where
   skip : Array Name := #[]
   /-- Whether to compute the `statement` facet (each statement taken apart, pretty-printed). -/
   statements : Bool := true
+  /-- Whether the `statement` facet records which constant each identifier stands for (`refs`). -/
+  refs : Bool := true
+  /-- Whether to compute the `signature` facet, for every node. -/
+  signatures : Bool := true
+  /-- Whether the `docstring` facet covers upstream nodes too, not only the project's. -/
+  upstreamDocs : Bool := true
 
 /-- The kind of a declaration, as recorded in `decls.jsonl`. -/
 def kindOf (env : Environment) (name : Name) (info : ConstantInfo) : String :=
@@ -336,11 +342,12 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   -- Facets.
   let mut facets : Array (FacetInfo × Array Json) := #[]
   let mut docRows : Array Json := #[]
-  for n in owned do
+  for n in (if cfg.upstreamDocs then nodeNames else owned) do
     if let some doc ← findDocString? env n then
       docRows := docRows.push <| Json.mkObj [("decl", toJson n.toString), ("text", toJson doc)]
   facets := facets.push
-    (facetInfo "docstring" "docstring/1" "the declaration's docstring, verbatim", docRows)
+    (facetInfo "docstring" "docstring/1" "the declaration's docstring, verbatim (project nodes, and \
+      upstream nodes unless the extractor ran with --no-upstream-docs)", docRows)
 
   let ranges ← runCoreM env do
     owned.mapM fun n => return (n, ← findDeclarationRanges? n)
@@ -384,13 +391,19 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
     progress t0 "axioms facet"
 
   if cfg.statements then
-    let rows ← statementRows env ((ownedInfos.zip ownedProp).map fun ((n, i), p) => (n, i, p))
+    let rows ← statementRows env ((ownedInfos.zip ownedProp).map fun ((n, i), p) => (n, i, p)) cfg.refs
     facets := facets.push (facetInfo "statement" "statement/1" "the declaration's statement taken \
         apart: its binders (name, pretty-printed type, role: type, variable, hypothesis or \
         instance), the conclusion under them, and for a definition its body, for a structure its \
         fields, for another inductive type its constructors; pretty-printed by Lean, `⋯` marking \
-        what a bounded printer cut", rows)
+        what a bounded printer cut; with each text, `refs`: the span and name of each constant it \
+        names, and with each binder the `head` constant of its type", rows)
     progress t0 "statement facet"
+  if cfg.signatures then
+    let rows ← signatureRows env nodeNames
+    facets := facets.push (facetInfo "signature" "signature/1" "every node's signature as Lean prints \
+        it (`name (x : α) … : β`), for hovers", rows)
+    progress t0 "signature facet"
 
   -- Annotations on any node. Several parts may report the same one; the merge keeps one copy.
   let nodeSet : Std.HashSet Name := nodeNames.foldl (·.insert ·) {}
@@ -598,6 +611,8 @@ partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Nam
   let args := #["extract-part", "--root", cfg.root.toString, "--modules-file", modsFile.toString,
       "--part-out", outFile.toString] ++ srcArgs ++ (if cfg.axioms then #[] else #["--no-axioms"]) ++
     (if cfg.statements then #[] else #["--no-statements"]) ++
+    (if cfg.refs then #[] else #["--no-refs"]) ++ (if cfg.signatures then #[] else #["--no-signatures"]) ++
+    (if cfg.upstreamDocs then #[] else #["--no-upstream-docs"]) ++
     (if cfg.term then #[] else #["--no-term"])
   progress t0 s!"part {label}: {mods.size} modules"
   let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args, stdin := .null }

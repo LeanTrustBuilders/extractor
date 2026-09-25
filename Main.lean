@@ -25,6 +25,9 @@ Options for `extract`:
   --no-term            skip the `term` notion, which walks every proof term
   --no-axioms          skip the axioms facet
   --no-statements      skip the statement facet (each statement taken apart and pretty-printed)
+  --no-refs            in the statement facet, do not record which constant each identifier names
+  --no-signatures      skip the signature facet (every node's signature, for hovers)
+  --no-upstream-docs   give docstrings for the project's declarations only
   --skip-module <Module>
                        do not extract this module, typically because it does not build at this
                        commit; every module importing it is skipped too (repeatable). The
@@ -56,6 +59,9 @@ partial def parseOpts (args : List String) (cfg : Config) (extra : List (String 
     | none => .error s!"--parts expects a number, got `{v}`"
   | "--no-axioms" :: rest => parseOpts rest { cfg with axioms := false } extra
   | "--no-statements" :: rest => parseOpts rest { cfg with statements := false } extra
+  | "--no-refs" :: rest => parseOpts rest { cfg with refs := false } extra
+  | "--no-signatures" :: rest => parseOpts rest { cfg with signatures := false } extra
+  | "--no-upstream-docs" :: rest => parseOpts rest { cfg with upstreamDocs := false } extra
   | "--no-term" :: rest => parseOpts rest { cfg with term := false } extra
   | "--jobs" :: v :: rest =>
     match v.toNat? with
