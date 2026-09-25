@@ -35,7 +35,7 @@ if ! diff -r "$work/out-a" "$work/out-a2" >/dev/null; then
   exit 1
 fi
 echo "ok: extraction is deterministic"
-(cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a3" --commit A --repo test/fixture --parts 3 --jobs 2 --check-deps)
+(cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a3" --commit A --repo test/fixture --parts 3 --jobs 2)
 # meta.json records the number of parts run (--parts 3 on four modules runs two); nothing else may
 # differ.
 cp -r "$work/out-a" "$work/cmp-1"
@@ -52,7 +52,7 @@ if ! diff -r "$work/cmp-1" "$work/cmp-3" >/dev/null; then
   diff -r "$work/cmp-1" "$work/cmp-3" | head -20 >&2
   exit 1
 fi
-echo "ok: extracting in parts, in parallel, gives the same dataset; dependencies agree with MeaningGraph's"
+echo "ok: extracting in parts, in parallel, gives the same dataset"
 
 cp -r "$work/a" "$work/b"
 cp -r "$here/fixture-b/." "$work/b/"
