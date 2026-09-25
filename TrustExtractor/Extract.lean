@@ -5,8 +5,6 @@ import TrustExtractor.Util
 import TrustExtractor.Hash
 import TrustExtractor.Source
 import TrustExtractor.Packages
-import TrustExtractor.Deps
-import TrustExtractor.Context
 
 /-!
 # Extraction: a compiled project to an S2 dataset
@@ -52,7 +50,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/0"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.2.2"
+def extractorVersion : String := "0.3.0"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
@@ -82,8 +80,6 @@ structure Config where
   jobs : Nat := 1
   /-- Whether to compute the `term` notion, which walks every proof term. -/
   term : Bool := true
-  /-- Whether to check the dependencies against MeaningGraph's own `Context.declDeps`. -/
-  checkDeps : Bool := false
   /-- Modules not to extract, typically because they do not build at this commit. The modules
   that import them, directly or not, are not extracted either. -/
   skip : Array Name := #[]
@@ -248,13 +244,10 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   progress t0 s!"imported {env.header.moduleNames.size} modules"
   let requested : Std.HashSet Name := mods.foldl (·.insert ·) {}
 
-  let moduleOf (n : Name) : Name :=
-    match env.getModuleIdxFor? n with
-    | some idx => env.header.moduleNames[idx.toNat]!
-    | none => .anonymous
+  let moduleOf (n : Name) : Name := (MeaningGraph.moduleNameOf env n).getD .anonymous
 
   -- The project declarations of the requested modules, in module order.
-  let ctx ← contextOf env cfg.root t0
+  let ctx := MeaningGraph.Context.of env cfg.root
   progress t0 s!"dependency tables: {ctx.constants.size} project constants, {ctx.exposed.size} exposed"
   let mut positions : Std.HashMap Name Nat := {}
   let mut ownedInfos : Array (Name × ConstantInfo) := #[]
@@ -269,49 +262,27 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
       try Meta.isProp info.type catch _ => return false
 
   -- The data of the owned definitions' values, proofs skipped.
-  let dataValues ← runMetaM env do
-    let mut m : Std.HashMap Name (Array Name) := {}
-    for (name, info) in ownedInfos do
-      if info matches .defnInfo _ then
-        m := m.insert name (← MeaningGraph.dataValueConstants info)
-    return m
-  let ctx := { ctx with dataValueConsts := dataValues }
-  progress t0 s!"data values of {dataValues.size} definitions"
+  let ctx ← runMetaM env (ctx.withDataValueConsts (only := some (owned.foldl (·.insert ·) {})))
+  progress t0 s!"data values of {ctx.dataValueConsts.size} definitions"
 
-  -- Dependencies.
-  let targets := (Array.range ownedInfos.size).map fun i =>
-    (ownedInfos[i]!.1, ownedInfos[i]!.2, ownedProp[i]!)
-  let deps ← depsOf ctx targets cfg.term
+  -- Dependencies under each notion, from MeaningGraph's lists: `statement` is `typeDeps`; `meaning`
+  -- is `typeDeps` for a proof, whose meaning is its statement, and `dataDeps` otherwise; `term` is
+  -- `deps`. A proof's value, the proof term, is walked only for `term`.
+  let proofs := (ownedInfos.zip ownedProp).filterMap fun (ni, p) => if p then some ni else none
+  let others := (ownedInfos.zip ownedProp).filterMap fun (ni, p) => if p then none else some ni
+  let computed := ctx.depsOf proofs { deps := cfg.term, dataDeps := false } ++
+    ctx.depsOf others { deps := cfg.term }
+  let byName : Std.HashMap Name MeaningGraph.DeclDeps := computed.foldl (fun m (n, d) => m.insert n d) {}
+  let deps : Array (Name × Array (Array Name)) := (ownedInfos.zip ownedProp).map fun ((n, _), p) =>
+    let d := byName.getD n default
+    (n, #[d.typeDeps, if p then d.typeDeps else d.dataDeps, d.deps])
   progress t0 s!"dependencies of {deps.size} project declarations"
-  if cfg.checkDeps then
-    -- The notation table, against MeaningGraph's own (which is slow on large projects).
-    let dedup (a : Array Name) : Array Name := a.foldl (fun acc n => if acc.contains n then acc else acc.push n) #[]
-    let refNotations := MeaningGraph.notationExpansionDeps env ctx.constants
-    let sameNotations := refNotations.size == ctx.notationDeps.size &&
-      refNotations.toList.all fun (k, v) => dedup v == dedup (ctx.notationDeps.getD k #[])
-    unless sameNotations do
-      throw <| IO.userError "the notation table differs from MeaningGraph's"
-    let mut cache : MeaningGraph.Cache := {}
-    let mut mismatches := 0
-    for h : i in [0:deps.size] do
-      let (name, d) := deps[i]
-      let (ref, cache') := ctx.declDeps cache name ownedInfos[i]!.2
-      cache := cache'
-      let refMeaning := if ownedProp[i]! then ref.typeDeps else ref.dataDeps
-      let same (a b : Array Name) := a.qsort (·.toString < ·.toString) == b.qsort (·.toString < ·.toString)
-      unless same d.statement ref.typeDeps && same d.meaning refMeaning &&
-          (!cfg.term || same d.term ref.deps) do
-        mismatches := mismatches + 1
-        IO.eprintln s!"dependencies of {name} differ from MeaningGraph's"
-    if mismatches > 0 then
-      throw <| IO.userError s!"{mismatches} declarations' dependencies differ from MeaningGraph's"
-    progress t0 "dependencies agree with MeaningGraph's"
 
   -- Nodes: the owned declarations, and the targets of their statement and meaning edges.
   let ownedSet : Std.HashSet Name := owned.foldl (·.insert ·) {}
   let mut others : Std.HashSet Name := {}
   for (_, d) in deps do
-    for dep in d.statement ++ d.meaning do
+    for dep in d[0]! ++ d[1]! do
       if !ownedSet.contains dep && env.contains dep then others := others.insert dep
   let otherInfos := others.toArray.filterMap fun n => (env.find? n).map (n, ·)
   let otherProp ← runMetaM env do
@@ -339,7 +310,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
       localHash := hex16 (← (localHash env info : IO UInt64)) }
 
   -- Edges, by name.
-  let edges := deps.map fun (n, d) => (n, #[d.statement, d.meaning, d.term])
+  let edges := deps
 
   -- Facets.
   let mut facets : Array (FacetInfo × Array Json) := #[]
@@ -544,7 +515,7 @@ partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Nam
   let srcArgs := cfg.srcDirs.foldl (fun a d => a ++ #["--src-dir", d.toString]) #[]
   let args := #["extract-part", "--root", cfg.root.toString, "--modules-file", modsFile.toString,
       "--part-out", outFile.toString] ++ srcArgs ++ (if cfg.axioms then #[] else #["--no-axioms"]) ++
-    (if cfg.term then #[] else #["--no-term"]) ++ (if cfg.checkDeps then #["--check-deps"] else #[])
+    (if cfg.term then #[] else #["--no-term"])
   progress t0 s!"part {label}: {mods.size} modules"
   let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args, stdin := .null }
   let code ← child.wait

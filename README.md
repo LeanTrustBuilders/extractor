@@ -10,9 +10,8 @@ reads `.olean` files, so it is the one released per Lean toolchain. Everything d
 ([evidence-core](https://github.com/LeanTrustBuilders/evidence-core), views, stores) reads the
 dataset and needs no Lean.
 
-Built on [MeaningGraph](https://github.com/RemyDegenne/meaning-graph) (dependencies),
-[semantic_hash](https://github.com/mathlib-initiative/semantic_hash) (hashes),
-[ChallengeGen](https://github.com/RemyDegenne/challenge-gen) and
+Built on [MeaningGraph](https://github.com/LeanTrustBuilders/meaning-graph) (dependencies),
+[semantic_hash](https://github.com/mathlib-initiative/semantic_hash) (hashes) and
 [TrustAnnotations](https://github.com/LeanTrustBuilders/annotations). The dataset layout follows
 the index format of [trust](https://github.com/chrisflav/trust).
 
@@ -68,14 +67,9 @@ a laptop and on a GitHub runner). `meta.json` records the number of parts (`prod
 takes.
 
 Other options: `--jobs N` runs up to N parts at once; `--no-term` skips the `term` notion, which walks
-every proof term; `--check-deps` checks every declaration's dependencies against MeaningGraph's own
-`Context.declDeps` (the extractor computes them with its own driver, which gives the same lists but
-skips proofs unless `term` is asked for, deduplicates with hash sets, and runs in parallel). The
-tables those computations rest on are MeaningGraph's too (`Context`), except the one mapping each
-notation to what it expands to: MeaningGraph walks every definition's value as a tree, which is
-exponential on values that share subterms (a part of Tau Ceti never finished), so the extractor
-builds that table itself, visiting each subterm once; `--check-deps` compares it with
-MeaningGraph's.
+every proof term. The dependencies are MeaningGraph's (`Context.depsOf`, in parallel): `statement` is
+its `typeDeps`, `meaning` its `typeDeps` for a proof and `dataDeps` otherwise, and `term` its `deps`,
+which is only computed when asked for.
 
 On Tau Ceti at 8befae0 (7,432 modules on top of Mathlib; 81,999 declarations), extraction takes
 about four minutes on a 32-core machine with `--parts 4 --jobs 2`, at most 8 GB of memory per
