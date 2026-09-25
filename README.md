@@ -27,16 +27,17 @@ lake env /path/to/trust-extract extract --root MyProject --repo owner/name --out
 The project and the extractor must use the same Lean toolchain: a `.olean` file can only be read by
 the Lean that wrote it. Releases are tagged by toolchain (`v4.34.0-rc2`, …).
 
-**Large projects need a higher memory-mapping limit.** Every imported module maps several files, and
-a project the size of Tau Ceti on top of Mathlib (about 15,000 modules) needs roughly 150,000
-mappings, more than Linux's default `vm.max_map_count` of 65,530. The symptom is
-`failed to read file '….olean.private'`. Raise the limit with
+**Large projects are extracted in parts.** Every imported module maps several files into memory,
+and a project the size of Tau Ceti on top of Mathlib (about 15,000 modules) needs more mappings than
+Linux's default limit (`vm.max_map_count`, 65,530) allows in one process. So `extract` imports the
+project in parts, each in a child process (`extract-part`), and merges them. A part that fails to
+import is split in two and retried; `--parts N` starts with N parts. A declaration's dependencies
+and hashes depend only on what its module imports, and nodes are ordered canonically, so the
+dataset is identical however the work was split: `test/run.sh` checks this. Raising the limit
+(`sudo sysctl -w vm.max_map_count=262144`) lets a large project be extracted in fewer parts.
 
-```bash
-sudo sysctl -w vm.max_map_count=262144
-```
-
-(or in `/etc/sysctl.d/` to keep it). GitHub-hosted runners allow this in a workflow step.
+`trust-extract diagnose-import <private|exported> <Prefix>` reports how many mappings an import
+takes.
 
 ## The dataset
 

@@ -28,6 +28,13 @@ if ! diff -r "$work/out-a" "$work/out-a2" >/dev/null; then
   exit 1
 fi
 echo "ok: extraction is deterministic"
+(cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a3" --commit A --repo test/fixture --parts 3)
+if ! diff -r "$work/out-a" "$work/out-a3" >/dev/null; then
+  echo "FAIL: extracting in 3 parts gives a different dataset" >&2
+  diff -r "$work/out-a" "$work/out-a3" | head -20 >&2
+  exit 1
+fi
+echo "ok: extracting in parts gives the same dataset"
 
 cp -r "$work/a" "$work/b"
 cp -r "$here/fixture-b/." "$work/b/"

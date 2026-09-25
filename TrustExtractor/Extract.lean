@@ -27,8 +27,19 @@ Upstream nodes have no outgoing edges: they are where a closure leaves the proje
 * `meaning`: what the declaration means — the statement for a proof, the statement and the data of
   the value for a definition, with the proofs embedded in the value skipped (`typeDeps` or
   `dataDeps`). This is the closure coverage is computed over;
-* `term`: the type and the whole value, proofs included (`deps`). Restricted to edges whose target
-  is a node, so lemmas used only in proofs of upstream packages are not listed.
+* `term`: the type and the whole value, proofs included (`deps`), restricted to edges whose target
+  is a node.
+
+## Parts
+
+Importing a large project in one process can exceed Linux's limit on memory mappings
+(`vm.max_map_count`): every module maps several files. So the work is split into **parts**. A part
+imports some of the project's modules (and, through them, whatever they import) and reports, for the
+declarations of *those* modules only, their nodes, edges and facets, keyed by name. The dependencies
+and hashes of a declaration depend only on what its module can see, so a declaration's data is the
+same in every part that could compute it, and merging the parts gives the same dataset as a single
+import. Nodes are ordered canonically (project nodes by module name, then by position in the module;
+upstream nodes by name), so the dataset does not depend on how the work was split.
 -/
 
 namespace TrustExtractor
@@ -42,7 +53,7 @@ def datasetSpec : String := "ltb-dataset/0"
 def extractorVersion : String := "0.1.0"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
-`trust-extract version` prints it and CI checks the two agree. -/
+`scripts/check-pins.py` checks the two agree. -/
 def semanticHashRevision : String := "0496f6d7b650cb03c9ffc61089ffd400dfd98564"
 
 /-- What to extract, and where to. -/
@@ -63,6 +74,8 @@ structure Config where
   project : String := ""
   /-- Whether to compute the `axioms` facet. -/
   axioms : Bool := true
+  /-- The number of parts to start with; a part that runs out of memory mappings is split. -/
+  parts : Nat := 1
 
 /-- The kind of a declaration, as recorded in `decls.jsonl`. -/
 def kindOf (env : Environment) (name : Name) (info : ConstantInfo) : String :=
@@ -98,157 +111,182 @@ def discoverModules (srcDirs : Array System.FilePath) (root : Name) : IO (Array 
     if ← rootDir.isDir then mods := mods ++ (← discoverUnder rootDir root)
   return (mods.qsort (·.toString < ·.toString)).toList.eraseDups.toArray
 
-/-- One node of the dataset. -/
-structure Node where
+/-! ## One part -/
+
+/-- A node, as a part reports it. -/
+structure NodeInfo where
   name : Name
-  info : ConstantInfo
+  module : Name
+  /-- Position of the declaration in its module's constant table: the canonical order of project
+  nodes within a module. -/
+  pos : Nat
+  package : String
   project : Bool
+  kind : String
+  isProp : Bool
+  meaning : Option String
+  content : Option String
+  localHash : String
 deriving Inhabited
 
-/-- A description of one edge file or facet in `meta.json`. -/
-def fileEntry (name file schema : String) (count : Nat) (description : String) : Json :=
-  Json.mkObj [("name", toJson name), ("file", toJson file), ("schema", toJson schema),
-    ("count", toJson count), ("description", toJson description)]
+def NodeInfo.asJson (n : NodeInfo) : Json :=
+  Json.mkObj [("name", toJson n.name.toString), ("module", toJson n.module.toString),
+    ("pos", toJson n.pos), ("package", toJson n.package), ("project", toJson n.project),
+    ("kind", toJson n.kind), ("isProp", toJson n.isProp), ("meaning", toJson n.meaning),
+    ("content", toJson n.content), ("local", toJson n.localHash)]
 
-/-- Extracts the dataset. The caller must have run `enableInitializersExecution`, so that the
-imported modules' extensions (among them `TrustAnnotations`') are registered and filled. -/
-def extract (cfg : Config) : IO Unit := do
-  let t0 ← IO.monoMsNow
+def NodeInfo.ofJson (j : Json) : Except String NodeInfo := do
+  return { name := (← j.getObjValAs? String "name").toName
+           module := (← j.getObjValAs? String "module").toName
+           pos := ← j.getObjValAs? Nat "pos", package := ← j.getObjValAs? String "package"
+           project := ← j.getObjValAs? Bool "project", kind := ← j.getObjValAs? String "kind"
+           isProp := ← j.getObjValAs? Bool "isProp"
+           meaning := (j.getObjValAs? String "meaning").toOption
+           content := (j.getObjValAs? String "content").toOption
+           localHash := ← j.getObjValAs? String "local" }
+
+/-- The notions of dependency, in the order their edge files are written. -/
+def notionNames : Array String := #["statement", "meaning", "term"]
+
+def notionDescription : String → String
+  | "statement" => "the constants the declaration's type mentions"
+  | "meaning" => "what the declaration means: its statement for a proof; its statement and the \
+      data of its value, proofs skipped, for a definition"
+  | "term" => "the type and the whole value, proofs included, restricted to targets that are nodes"
+  | _ => ""
+
+/-- A facet's description in `meta.json`. -/
+structure FacetInfo where
+  name : String
+  schema : String
+  description : String
+deriving Inhabited
+
+/-- A facet description. -/
+def facetInfo (name schema description : String) : FacetInfo := { name, schema, description }
+
+/-- What one part reports. Everything is keyed by name, so parts can be merged. -/
+structure Part where
+  /-- Nodes: the project declarations of the requested modules, and every constant their
+  statement and data edges point to. -/
+  nodes : Array NodeInfo
+  /-- The project declarations this part is authoritative for. -/
+  owned : Array Name
+  /-- For each owned declaration, its targets under each notion (in `notionNames` order). -/
+  edges : Array (Name × Array (Array Name))
+  /-- Facet rows, by facet name. -/
+  facets : Array (FacetInfo × Array Json)
+  /-- The number of modules the part imported. -/
+  imported : Nat
+deriving Inhabited
+
+def Part.asJson (p : Part) : Json :=
+  Json.mkObj [
+    ("nodes", Json.arr (p.nodes.map NodeInfo.asJson)),
+    ("owned", toJson (p.owned.map toString)),
+    ("edges", Json.arr (p.edges.map fun (n, ts) =>
+      Json.mkObj [("decl", toJson n.toString),
+        ("targets", toJson (ts.map (·.map toString)))])),
+    ("facets", Json.arr (p.facets.map fun (f, rows) =>
+      Json.mkObj [("name", toJson f.name), ("schema", toJson f.schema),
+        ("description", toJson f.description), ("rows", Json.arr rows)])),
+    ("imported", toJson p.imported)]
+
+def Part.ofJson (j : Json) : Except String Part := do
+  let nodes ← (← j.getObjValAs? (Array Json) "nodes").mapM NodeInfo.ofJson
+  let owned := (← j.getObjValAs? (Array String) "owned").map (·.toName)
+  let edges ← (← j.getObjValAs? (Array Json) "edges").mapM fun e => do
+    let ts ← e.getObjValAs? (Array (Array String)) "targets"
+    return ((← e.getObjValAs? String "decl").toName, ts.map (·.map (·.toName)))
+  let facets ← (← j.getObjValAs? (Array Json) "facets").mapM fun f => do
+    return ({ name := ← f.getObjValAs? String "name", schema := ← f.getObjValAs? String "schema"
+              description := ← f.getObjValAs? String "description" },
+            ← f.getObjValAs? (Array Json) "rows")
+  return { nodes, owned, edges, facets, imported := ← j.getObjValAs? Nat "imported" }
+
+/-- Collects one part: imports `mods` and reports on the project declarations of those modules.
+The caller must have run `enableInitializersExecution`, so that the imported modules' extensions
+(among them `TrustAnnotations`') are registered and filled. -/
+def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat) : IO Part := do
   initSearchPath (← findSysroot)
-  let mods ← if cfg.modules.isEmpty then discoverModules cfg.srcDirs cfg.root else pure cfg.modules
-  if mods.isEmpty then
-    throw <| IO.userError s!"no modules found under the prefix `{cfg.root}` in {cfg.srcDirs}"
-  let project := if cfg.project.isEmpty then cfg.root.toString else cfg.project
-  let commit ← if cfg.commit.isEmpty then
-      pure ((← commandOutput? "git" #["rev-parse", "HEAD"]).getD "")
-    else pure cfg.commit
-  let dirty := !((← commandOutput? "git" #["status", "--porcelain"]).getD "").isEmpty
-  -- The project's own pin: `Lean.versionString` drops the release-candidate suffix.
-  let toolchain ← do
-    let f : System.FilePath := "lean-toolchain"
-    if ← f.pathExists then pure (← IO.FS.readFile f).trimAscii.toString
-    else pure s!"leanprover/lean4:v{Lean.versionString}"
-
   progress t0 s!"importing {mods.size} modules"
   let env ← importModules (mods.map ({ module := · })) {} (loadExts := true)
-  progress t0 "imported"
+  progress t0 s!"imported {env.header.moduleNames.size} modules"
+  let requested : Std.HashSet Name := mods.foldl (·.insert ·) {}
 
-  -- Dependencies.
-  let ctx := MeaningGraph.Context.of env cfg.root
-  let ctx ← runMetaM env ctx.withDataValueConsts
-  let deps := ctx.allDeclDeps
-  progress t0 s!"dependencies of {deps.size} project declarations"
-
-  -- Nodes: the project's declarations, then the upstream constants their statements and data
-  -- mention, sorted by name.
-  let projectNames : Std.HashSet Name := deps.foldl (fun s (n, _) => s.insert n) {}
-  let mut upstream : Std.HashSet Name := {}
-  for (_, d) in deps do
-    for dep in d.typeDeps ++ d.dataDeps do
-      if !projectNames.contains dep && env.contains dep then
-        upstream := upstream.insert dep
-  let upstreamSorted := upstream.toArray.qsort (·.toString < ·.toString)
-  let mut nodes : Array Node := #[]
-  for (n, _) in deps do
-    if let some info := env.find? n then nodes := nodes.push { name := n, info, project := true }
-  for n in upstreamSorted do
-    if let some info := env.find? n then nodes := nodes.push { name := n, info, project := false }
-  let ids : Std.HashMap Name Nat :=
-    (Array.range nodes.size).foldl (fun m i => m.insert nodes[i]!.name i) {}
-  progress t0 s!"{projectNames.size} project nodes, {upstreamSorted.size} upstream nodes"
-
-  -- Whether each node is a proof.
-  let isProp ← runMetaM env do
-    nodes.mapM fun node => do
-      if node.info matches .thmInfo _ then return true
-      try Meta.isProp node.info.type catch _ => return false
-
-  -- Hashes.
-  let hashes ← SemanticHash.Hashing.runBoth env
-  progress t0 "semantic hashes"
-  let locals ← nodes.mapM fun node => (localHash env node.info : IO UInt64)
-
-  -- Packages.
-  let search ← labelledSearchPath project
-  let pkgCache ← IO.mkRef ({} : Std.HashMap Name String)
   let moduleOf (n : Name) : Name :=
     match env.getModuleIdxFor? n with
     | some idx => env.header.moduleNames[idx.toNat]!
     | none => .anonymous
 
-  IO.FS.createDirAll (cfg.out / "edges")
-  IO.FS.createDirAll (cfg.out / "facets")
+  -- Dependencies, for the project declarations of the requested modules.
+  let ctx := MeaningGraph.Context.of env cfg.root
+  let ctx ← runMetaM env ctx.withDataValueConsts
+  let deps := ctx.allDeclDeps.filter fun (n, _) => requested.contains (moduleOf n)
+  progress t0 s!"dependencies of {deps.size} project declarations"
 
-  -- decls.jsonl
-  let mut declLines : Array Json := #[]
-  for h : i in [0:nodes.size] do
-    let node := nodes[i]
-    let mod := moduleOf node.name
-    let pkg ← packageOf search pkgCache mod
-    let hs := Json.mkObj <|
-      (match hashes.proofIrrelHashes.get? node.name with
-        | some h => [("meaning", toJson (hex16 h))] | none => []) ++
-      (match hashes.fullHashes.get? node.name with
-        | some h => [("content", toJson (hex16 h))] | none => []) ++
-      [("local", toJson (hex16 locals[i]!))]
-    declLines := declLines.push <| Json.mkObj [
-      ("id", toJson i), ("name", toJson node.name.toString), ("module", toJson mod.toString),
-      ("package", toJson pkg), ("scope", toJson (if node.project then "project" else "upstream")),
-      ("kind", toJson (kindOf env node.name node.info)), ("isProp", toJson isProp[i]!),
-      ("hashes", hs)]
-  writeJsonl (cfg.out / "decls.jsonl") declLines
-  progress t0 "wrote decls.jsonl"
+  -- Positions in the module constant tables, for the canonical order of project nodes.
+  let mut positions : Std.HashMap Name Nat := {}
+  for (name, mod, _) in ctx.constants do
+    if requested.contains mod then
+      positions := positions.insert name positions.size
 
-  -- Edges.
-  let notions : Array (String × String × (Nat → MeaningGraph.DeclDeps → Array Name)) := #[
-    ("statement", "the constants the declaration's type mentions", fun _ d => d.typeDeps),
-    ("meaning", "what the declaration means: its statement for a proof; its statement and the \
-      data of its value, proofs skipped, for a definition", fun i d =>
-        if isProp[i]! then d.typeDeps else d.dataDeps),
-    ("term", "the type and the whole value, proofs included, restricted to targets that are nodes",
-      fun _ d => d.deps)]
-  let mut edgeEntries : Array Json := #[]
-  for (notion, description, select) in notions do
-    let mut buf : ByteArray := .empty
-    let mut count := 0
-    for h : i in [0:deps.size] do
-      let (n, d) := deps[i]
-      let some src := ids.get? n | continue
-      for dep in select src d do
-        if let some tgt := ids.get? dep then
-          buf := pushI32LE (pushI32LE buf src) tgt
-          count := count + 1
-    IO.FS.writeBinFile (cfg.out / "edges" / s!"{notion}.bin") buf
-    edgeEntries := edgeEntries.push <| Json.mkObj [
-      ("name", toJson notion), ("file", toJson s!"edges/{notion}.bin"),
-      ("format", toJson "i32le-pairs"), ("count", toJson count),
-      ("description", toJson description)]
-  progress t0 "wrote edges"
+  -- Nodes: the owned declarations, and the targets of their statement and data edges.
+  let owned := deps.map (·.1)
+  let ownedSet : Std.HashSet Name := owned.foldl (·.insert ·) {}
+  let mut others : Std.HashSet Name := {}
+  for (_, d) in deps do
+    for dep in d.typeDeps ++ d.dataDeps do
+      if !ownedSet.contains dep && env.contains dep then others := others.insert dep
+  let nodeNames := owned ++ others.toArray
+  let infos := nodeNames.filterMap fun n => (env.find? n).map (n, ·)
+
+  let isProp ← runMetaM env do
+    infos.mapM fun (_, info) => do
+      if info matches .thmInfo _ then return true
+      try Meta.isProp info.type catch _ => return false
+  let isPropOf : Std.HashMap Name Bool :=
+    (Array.range infos.size).foldl (fun m i => m.insert infos[i]!.1 isProp[i]!) {}
+  let hashes ← SemanticHash.Hashing.runBoth env
+  progress t0 "semantic hashes"
+  let search ← labelledSearchPath project
+  let pkgCache ← IO.mkRef ({} : Std.HashMap Name String)
+  let mut nodes : Array NodeInfo := #[]
+  for h : i in [0:infos.size] do
+    let (name, info) := infos[i]
+    let mod := moduleOf name
+    nodes := nodes.push {
+      name, module := mod, pos := positions.getD name 0
+      package := ← packageOf search pkgCache mod
+      project := MeaningGraph.isProjectLocalConst env cfg.root name
+      kind := kindOf env name info, isProp := isProp[i]!
+      meaning := (hashes.proofIrrelHashes.get? name).map hex16
+      content := (hashes.fullHashes.get? name).map hex16
+      localHash := hex16 (← (localHash env info : IO UInt64)) }
+
+  -- Edges, by name.
+  let edges := deps.map fun (n, d) =>
+    let meaningTargets := if isPropOf.getD n false then d.typeDeps else d.dataDeps
+    (n, #[d.typeDeps, meaningTargets, d.deps])
 
   -- Facets.
-  let mut facetEntries : Array Json := #[]
-  let projectNodes := nodes.filter (·.project)
+  let mut facets : Array (FacetInfo × Array Json) := #[]
+  let mut docRows : Array Json := #[]
+  for n in owned do
+    if let some doc ← findDocString? env n then
+      docRows := docRows.push <| Json.mkObj [("decl", toJson n.toString), ("text", toJson doc)]
+  facets := facets.push
+    (facetInfo "docstring" "docstring/1" "the declaration's docstring, verbatim", docRows)
 
-  -- docstring
-  let mut docLines : Array Json := #[]
-  for node in projectNodes do
-    if let some doc ← findDocString? env node.name then
-      docLines := docLines.push <| Json.mkObj [("decl", toJson node.name.toString), ("text", toJson doc)]
-  writeJsonl (cfg.out / "facets" / "docstring.jsonl") docLines
-  facetEntries := facetEntries.push <| fileEntry "docstring" "facets/docstring.jsonl" "docstring/1"
-    docLines.size "the declaration's docstring, verbatim"
-
-  -- source
   let ranges ← runCoreM env do
-    projectNodes.mapM fun node => return (node.name, ← findDeclarationRanges? node.name)
+    owned.mapM fun n => return (n, ← findDeclarationRanges? n)
   let texts ← IO.mkRef ({} : Std.HashMap Name (Option (String × System.FilePath)))
   let cwd ← IO.currentDir
-  let mut srcLines : Array Json := #[]
+  let mut srcRows : Array Json := #[]
   for (name, range?) in ranges do
     let some range := range? | continue
     let mod := moduleOf name
-    let cached := (← texts.get).get? mod
-    let file? ← match cached with
+    let file? ← match (← texts.get).get? mod with
       | some f => pure f
       | none => do
         let f ← match ← findSource? cfg.srcDirs mod with
@@ -257,8 +295,7 @@ def extract (cfg : Config) : IO Unit := do
         texts.modify (·.insert mod f)
         pure f
     let some (text, path) := file? | continue
-    let fileMap := text.toFileMap
-    let pos := fileMap.ofPosition range.range.pos
+    let pos := text.toFileMap.ofPosition range.range.pos
     let relPath :=
       let s := path.toString
       let c := cwd.toString ++ "/"
@@ -269,42 +306,134 @@ def extract (cfg : Config) : IO Unit := do
       startLine := range.range.pos.line, startCol := range.range.charUtf16
       endLine := range.range.endPos.line, endCol := range.range.endCharUtf16
       keyword := keywordAt text pos }
-    srcLines := srcLines.push (loc.asJson name)
-  writeJsonl (cfg.out / "facets" / "source.jsonl") srcLines
-  facetEntries := facetEntries.push <| fileEntry "source" "facets/source.jsonl" "source/1"
-    srcLines.size "where the declaration is written: path relative to the project root, start and \
-    end as [line, column] (lines 1-based, columns in UTF-16 code units, 0-based), and the keyword \
-    it is written with"
-  progress t0 "wrote docstring and source facets"
+    srcRows := srcRows.push (loc.asJson name)
+  facets := facets.push (facetInfo "source" "source/1" "where the declaration is written: path relative to the project root, start and \
+      end as [line, column] (lines 1-based, columns in UTF-16 code units, 0-based), and the \
+      keyword it is written with", srcRows)
+  progress t0 "docstring and source facets"
 
-  -- axioms
   if cfg.axioms then
     let axioms ← runCoreM env do
-      projectNodes.mapM fun node => return (node.name, ← collectAxioms node.name)
-    let axLines := axioms.map fun (name, axs) =>
-      let sorted := axs.qsort (·.toString < ·.toString)
-      Json.mkObj [("decl", toJson name.toString),
-        ("axioms", toJson (sorted.map (·.toString))),
+      owned.mapM fun n => return (n, ← collectAxioms n)
+    let rows := axioms.map fun (n, axs) =>
+      Json.mkObj [("decl", toJson n.toString),
+        ("axioms", toJson ((axs.qsort (·.toString < ·.toString)).map (·.toString))),
         ("sorry", toJson (axs.contains ``sorryAx))]
-    writeJsonl (cfg.out / "facets" / "axioms.jsonl") axLines
-    facetEntries := facetEntries.push <| fileEntry "axioms" "facets/axioms.jsonl" "axioms/1"
-      axLines.size "the axioms the declaration depends on, transitively, and whether `sorryAx` \
-      is among them"
-    progress t0 "wrote axioms facet"
+    facets := facets.push (facetInfo "axioms" "axioms/1" "the axioms the declaration depends on, transitively, and whether `sorryAx` \
+        is among them", rows)
+    progress t0 "axioms facet"
 
-  -- annotations, one facet per attribute
-  let entries := (TrustAnnotations.entries env).filter (ids.contains ·.decl)
-  let attrs := (entries.map (·.attr)).toList.eraseDups.toArray.qsort (·.toString < ·.toString)
+  -- Annotations on any node. Several parts may report the same one; the merge keeps one copy.
+  let nodeSet : Std.HashSet Name := nodeNames.foldl (·.insert ·) {}
+  let entries := (TrustAnnotations.entries env).filter (nodeSet.contains ·.decl)
+  let attrs := (entries.map (·.attr)).toList.eraseDups.toArray
   for attr in attrs do
-    let lines := (entries.filter (·.attr == attr)).map fun e =>
+    let rows := (entries.filter (·.attr == attr)).map fun e =>
       Json.mkObj [("decl", toJson e.decl.toString),
         ("payload", (Json.parse e.payload).toOption.getD (toJson e.payload))]
-    let file := s!"facets/annotation.{attr}.jsonl"
-    writeJsonl (cfg.out / file) lines
-    facetEntries := facetEntries.push <| fileEntry s!"annotation.{attr}" file "annotation/1"
-      lines.size s!"`@[{attr}]` annotations recorded in the TrustAnnotations extension"
+    facets := facets.push (facetInfo s!"annotation.{attr}" "annotation/1"
+      s!"`@[{attr}]` annotations recorded in the TrustAnnotations extension", rows)
 
-  -- meta.json
+  return { nodes, owned, edges, facets, imported := env.header.moduleNames.size }
+
+/-! ## Merging parts into a dataset -/
+
+/-- Merges parts and writes the dataset. -/
+def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (project : String)
+    (t0 : Nat) : IO Unit := do
+  let commit ← if cfg.commit.isEmpty then
+      pure ((← commandOutput? "git" #["rev-parse", "HEAD"]).getD "")
+    else pure cfg.commit
+  let dirty := !((← commandOutput? "git" #["status", "--porcelain"]).getD "").isEmpty
+  -- The project's own pin: `Lean.versionString` drops the release-candidate suffix.
+  let toolchain ← do
+    let f : System.FilePath := "lean-toolchain"
+    if ← f.pathExists then pure (← IO.FS.readFile f).trimAscii.toString
+    else pure s!"leanprover/lean4:v{Lean.versionString}"
+
+  -- Nodes: owned project nodes from the part that owns them; upstream nodes from any part.
+  let mut owner : Std.HashMap Name NodeInfo := {}
+  for p in parts do
+    let ownedSet : Std.HashSet Name := p.owned.foldl (·.insert ·) {}
+    for n in p.nodes do
+      if ownedSet.contains n.name then owner := owner.insert n.name n
+  let mut others : Std.HashMap Name NodeInfo := {}
+  for p in parts do
+    for n in p.nodes do
+      if !owner.contains n.name && !others.contains n.name && !n.project then
+        others := others.insert n.name n
+  let projectNodes := owner.toArray.map (·.2) |>.qsort fun a b =>
+    a.module.toString < b.module.toString || (a.module == b.module && a.pos < b.pos)
+  let upstreamNodes := others.toArray.map (·.2) |>.qsort (·.name.toString < ·.name.toString)
+  let nodes := projectNodes ++ upstreamNodes
+  let ids : Std.HashMap Name Nat :=
+    (Array.range nodes.size).foldl (fun m i => m.insert nodes[i]!.name i) {}
+  progress t0 s!"{projectNodes.size} project nodes, {upstreamNodes.size} upstream nodes"
+
+  IO.FS.createDirAll (cfg.out / "edges")
+  IO.FS.createDirAll (cfg.out / "facets")
+
+  let declLines := (Array.range nodes.size).map fun i =>
+    let n := nodes[i]!
+    let hs := Json.mkObj <|
+      (match n.meaning with | some h => [("meaning", toJson h)] | none => []) ++
+      (match n.content with | some h => [("content", toJson h)] | none => []) ++
+      [("local", toJson n.localHash)]
+    Json.mkObj [("id", toJson i), ("name", toJson n.name.toString),
+      ("module", toJson n.module.toString), ("package", toJson n.package),
+      ("scope", toJson (if n.project then "project" else "upstream")), ("kind", toJson n.kind),
+      ("isProp", toJson n.isProp), ("hashes", hs)]
+  writeJsonl (cfg.out / "decls.jsonl") declLines
+
+  -- Edges, in node order.
+  let mut targets : Std.HashMap Name (Array (Array Name)) := {}
+  for p in parts do
+    for (n, ts) in p.edges do targets := targets.insert n ts
+  let mut edgeEntries : Array Json := #[]
+  for h : k in [0:notionNames.size] do
+    let notion := notionNames[k]
+    let mut buf : ByteArray := .empty
+    let mut count := 0
+    for n in projectNodes do
+      let some src := ids.get? n.name | continue
+      let some ts := targets.get? n.name | continue
+      for t in ts[k]! do
+        if let some tgt := ids.get? t then
+          buf := pushI32LE (pushI32LE buf src) tgt
+          count := count + 1
+    IO.FS.writeBinFile (cfg.out / "edges" / s!"{notion}.bin") buf
+    edgeEntries := edgeEntries.push <| Json.mkObj [
+      ("name", toJson notion), ("file", toJson s!"edges/{notion}.bin"),
+      ("format", toJson "i32le-pairs"), ("count", toJson count),
+      ("description", toJson (notionDescription notion))]
+
+  -- Facets: rows merged by facet, in node order, one row per declaration.
+  let mut facetMeta : Std.HashMap String FacetInfo := {}
+  let mut facetRows : Std.HashMap String (Std.HashMap Name Json) := {}
+  for p in parts do
+    for (f, rows) in p.facets do
+      facetMeta := facetMeta.insert f.name f
+      let mut m := facetRows.getD f.name {}
+      for r in rows do
+        if let .ok d := r.getObjValAs? String "decl" then
+          if !m.contains d.toName then m := m.insert d.toName r
+      facetRows := facetRows.insert f.name m
+  let facetOrder := ["docstring", "source", "axioms"]
+  let names := facetMeta.toArray.map (·.1) |>.qsort fun a b =>
+    let ia := facetOrder.idxOf a
+    let ib := facetOrder.idxOf b
+    ia < ib || (ia == ib && a < b)
+  let mut facetEntries : Array Json := #[]
+  for name in names do
+    let some info := facetMeta.get? name | continue
+    let rowsByDecl := facetRows.getD name {}
+    let rows := nodes.filterMap (rowsByDecl.get? ·.name)
+    let file := s!"facets/{name}.jsonl"
+    writeJsonl (cfg.out / file) rows
+    facetEntries := facetEntries.push <| Json.mkObj [("name", toJson name),
+      ("file", toJson file), ("schema", toJson info.schema), ("count", toJson rows.size),
+      ("description", toJson info.description)]
+
   let metaJson := Json.mkObj [
     ("spec", toJson datasetSpec),
     ("producer", Json.mkObj [("name", toJson "trust-extract"), ("version", toJson extractorVersion)]),
@@ -317,10 +446,79 @@ def extract (cfg : Config) : IO Unit := do
       ("revision", toJson semanticHashRevision), ("meaning", toJson "proof-irrelevant"),
       ("content", toJson "proof-relevant"), ("local", toJson localHasherName)]),
     ("counts", Json.mkObj [("nodes", toJson nodes.size), ("project", toJson projectNodes.size),
-      ("upstream", toJson (nodes.size - projectNodes.size))]),
+      ("upstream", toJson upstreamNodes.size)]),
     ("edges", toJson edgeEntries),
     ("facets", toJson facetEntries)]
   IO.FS.writeFile (cfg.out / "meta.json") (metaJson.pretty ++ "\n")
   progress t0 s!"wrote {cfg.out}"
+
+/-! ## Driving the parts -/
+
+/-- The exit code of `extract-part` when importing failed, typically because the process ran out
+of memory mappings: the caller splits the part and retries. -/
+def importFailedExit : UInt32 := 3
+
+/-- Runs `extract-part` on `mods` in a child process, splitting and retrying on import failure. -/
+partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Name) (label : String)
+    (t0 : Nat) : IO (Array Part) := do
+  let modsFile := workDir / s!"part-{label}.modules"
+  let outFile := workDir / s!"part-{label}.json"
+  IO.FS.writeFile modsFile ("\n".intercalate (mods.toList.map toString))
+  let srcArgs := cfg.srcDirs.foldl (fun a d => a ++ #["--src-dir", d.toString]) #[]
+  let args := #["extract-part", "--root", cfg.root.toString, "--modules-file", modsFile.toString,
+      "--part-out", outFile.toString] ++ srcArgs ++ (if cfg.axioms then #[] else #["--no-axioms"])
+  progress t0 s!"part {label}: {mods.size} modules"
+  let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args, stdin := .null }
+  let code ← child.wait
+  if code == 0 then
+    let j ← IO.ofExcept (Json.parse (← IO.FS.readFile outFile))
+    let part ← IO.ofExcept (Part.ofJson j)
+    IO.FS.removeFile outFile
+    IO.FS.removeFile modsFile
+    return #[part]
+  else if code == importFailedExit && mods.size > 1 then
+    progress t0 s!"part {label} could not import its modules; splitting it"
+    let half := mods.size / 2
+    return (← runPart cfg workDir (mods.extract 0 half) s!"{label}a" t0) ++
+      (← runPart cfg workDir (mods.extract half mods.size) s!"{label}b" t0)
+  else
+    throw <| IO.userError s!"part {label} failed (exit {code})"
+
+/-- Extracts the dataset: runs the parts in child processes and merges them. -/
+def extract (cfg : Config) : IO Unit := do
+  let t0 ← IO.monoMsNow
+  let mods ← if cfg.modules.isEmpty then discoverModules cfg.srcDirs cfg.root else pure cfg.modules
+  if mods.isEmpty then
+    throw <| IO.userError s!"no modules found under the prefix `{cfg.root}` in {cfg.srcDirs}"
+  let project := if cfg.project.isEmpty then cfg.root.toString else cfg.project
+  let workDir := cfg.out.withFileName (cfg.out.fileName.getD "dataset" ++ ".parts")
+  IO.FS.createDirAll workDir
+  let n := max 1 (min cfg.parts mods.size)
+  let size := (mods.size + n - 1) / n
+  let mut parts : Array Part := #[]
+  for i in [0:n] do
+    let chunk := mods.extract (i * size) ((i + 1) * size)
+    if !chunk.isEmpty then
+      parts := parts ++ (← runPart cfg workDir chunk s!"{i}" t0)
+  try IO.FS.removeDirAll workDir catch _ => pure ()
+  writeDataset cfg parts mods project t0
+
+/-- The `extract-part` subcommand: collects one part and writes it as JSON. Exits with
+`importFailedExit` when importing fails, so that the caller splits the part. -/
+def extractPart (cfg : Config) (mods : Array Name) (out : System.FilePath) : IO UInt32 := do
+  let t0 ← IO.monoMsNow
+  let project := if cfg.project.isEmpty then cfg.root.toString else cfg.project
+  let part? ← try
+      pure (some (← collectPart cfg mods project t0))
+    catch e =>
+      if (toString e).startsWith "failed to read file" then
+        IO.eprintln s!"import failed: {e}"
+        pure none
+      else throw e
+  match part? with
+  | none => return importFailedExit
+  | some part =>
+    IO.FS.writeFile out part.asJson.compress
+    return 0
 
 end TrustExtractor
