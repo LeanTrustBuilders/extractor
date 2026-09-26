@@ -25,7 +25,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "ab8231d1885c86fc5c54bba99eb935810ad88591",
+   "rev": "d5f6a4eb6bcd0cdb092ca1f89c5aa147506a4ffd",
    "name": "MeaningGraph",
    "manifestFile": "lake-manifest.json",
    "inputRev": "lean-v4.34.0",

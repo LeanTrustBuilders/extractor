@@ -28,6 +28,12 @@ Options for `extract`:
   --no-refs            in the statement facet, do not record which constant each identifier names
   --no-signatures      skip the signature facet (every node's signature, for hovers)
   --no-upstream-docs   give docstrings for the project's declarations only
+  --upstream-closure <statement|meaning|term>
+                       follow dependencies past the project along this notion (`term`: what a
+                       definition's value mentions, the lemmas its proofs call included, as trust
+                       draws it). Every upstream declaration reached becomes a node, with edges of
+                       its own in `upstream-<notion>` files; the statement facet covers the ones
+                       that are not proofs
   --skip-module <Module>
                        do not extract this module, typically because it does not build at this
                        commit; every module importing it is skipped too (repeatable). The
@@ -63,6 +69,10 @@ partial def parseOpts (args : List String) (cfg : Config) (extra : List (String 
   | "--no-signatures" :: rest => parseOpts rest { cfg with signatures := false } extra
   | "--no-upstream-docs" :: rest => parseOpts rest { cfg with upstreamDocs := false } extra
   | "--no-term" :: rest => parseOpts rest { cfg with term := false } extra
+  | "--upstream-closure" :: v :: rest =>
+    match followOfName? v with
+    | some f => parseOpts rest { cfg with upstreamClosure := some f } extra
+    | none => .error s!"--upstream-closure expects statement, meaning or term, got `{v}`"
   | "--jobs" :: v :: rest =>
     match v.toNat? with
     | some n => parseOpts rest { cfg with jobs := n } extra
