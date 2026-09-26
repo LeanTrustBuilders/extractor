@@ -1,7 +1,7 @@
 name: Extract a dataset
 description: >-
   Extract the dataset (S2) of a built Lean library with the newest trust-extract release for its
-  toolchain, add the examples facet, and publish it as a release of this repository if asked.
+  toolchain, add the examples and attributes facets, and publish it as a release of this repository if asked.
 inputs:
   root:
     description: The library's root module (TauCeti, LeanMachineLearning).
@@ -20,6 +20,9 @@ inputs:
     default: ''
   examples:
     description: Add the `examples` facet, the library's `example`s read from its sources.
+    default: 'true'
+  attributes:
+    description: Add the `attributes` facet, the attributes each declaration is written with, read from its sources.
     default: 'true'
   publish:
     description: Publish the dataset as this release tag of the current repository (dataset-<commit12>).
@@ -53,6 +56,7 @@ runs:
         OUT: ${{ inputs.out }}
         ARGS: ${{ inputs.args }}
         EXAMPLES: ${{ inputs.examples }}
+        ATTRIBUTES: ${{ inputs.attributes }}
       run: |
         dir="$RUNNER_TEMP/trust-extract-release"
         tag=$("$GITHUB_ACTION_PATH/../ci/release.sh" install "$DIRECTORY/lean-toolchain" "$dir")
@@ -65,8 +69,12 @@ runs:
         # extraction needs fewer parts.
         sudo sysctl -q -w vm.max_map_count=262144 || true
         (cd "$DIRECTORY" && lake env "$bin" extract --root "$ROOT" ${LIB_REPO:+--repo "$LIB_REPO"} --out "$out" $ARGS)
+        # The facets read from the sources: this repository's scripts (the action's own checkout).
         if [ "$EXAMPLES" = "true" ]; then
-          python3 "$dir/trust-extract/examples.py" --dataset "$out" --source "$DIRECTORY"
+          python3 "$GITHUB_ACTION_PATH/../scripts/examples.py" --dataset "$out" --source "$DIRECTORY"
+        fi
+        if [ "$ATTRIBUTES" = "true" ]; then
+          python3 "$GITHUB_ACTION_PATH/../scripts/attributes.py" --dataset "$out" --source "$DIRECTORY"
         fi
         du -sh "$out"
         { echo "dataset=$out"; echo "version=$version"; } >> "$GITHUB_OUTPUT"

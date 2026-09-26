@@ -198,6 +198,21 @@ the dataset's commit, finds every `example`, resolves the names its statement us
 examples, with their statements and whether they use `sorry`. On Tau Ceti at 8befae0 it finds 213
 examples, naming 83 declarations, in 5 seconds.
 
+## Attributes: the `attributes` facet
+
+A library says things about its declarations in attributes that only it can read in the compiled
+library: Mathlib's `@[stacks 09GA]`, `@[kerodon 0001]` and `@[wikidata Q616608]` link a declaration
+to the Stacks project, Kerodon and Wikipedia; `@[deprecated]` marks an alias kept for compatibility.
+`scripts/attributes.py` reads them from the sources, as written before each declaration's keyword,
+and adds the facet `attributes` (schema `attributes/1`: `{decl, attributes: [{name, args}]}`):
+
+```bash
+python3 scripts/attributes.py --dataset dataset --source path/to/the/checkout
+```
+
+On Mathlib, 90,841 declarations are written with attributes. Attributes added later by an
+`attribute [...] name` command are not seen. The `extract` action runs it, as it runs `examples.py`.
+
 ## Checking a dataset
 
 ```bash

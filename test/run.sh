@@ -92,6 +92,21 @@ assert any(f["name"] == "examples" and f["schema"] == "examples/1" for f in json
 EOF3
 echo "ok: the examples facet finds the fixture's example"
 
+# The attributes facet, from the sources: `@[specifies …, specifies …]` and `@[claim "…"]` as written.
+cp -r "$work/out-b" "$work/out-b-attributes"
+python3 "$root/scripts/attributes.py" --dataset "$work/out-b-attributes" --source "$work/b" > /dev/null
+python3 - "$work/out-b-attributes" <<'EOF4'
+import json, sys
+from pathlib import Path
+d = Path(sys.argv[1])
+rows = {json.loads(l)["decl"]: json.loads(l)["attributes"] for l in (d / "facets" / "attributes.jsonl").read_text().splitlines()}
+assert rows["Fixture.double_triple"] == [{"name": "specifies", "args": 'double "relates it to `triple`"'},
+                                         {"name": "specifies", "args": "triple"}], rows["Fixture.double_triple"]
+assert rows["Fixture.triple_pos"] == [{"name": "claim", "args": '"Fixture, Theorem 1"'}], rows["Fixture.triple_pos"]
+assert any(f["name"] == "attributes" and f["schema"] == "attributes/1" for f in json.loads((d / "meta.json").read_text())["facets"])
+EOF4
+echo "ok: the attributes facet reads the fixture's attributes"
+
 (cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b-partial" --commit B --repo test/fixture --skip-module Fixture.Uses)
 python3 "$here/check_partial.py" "$work/out-b" "$work/out-b-partial"
 

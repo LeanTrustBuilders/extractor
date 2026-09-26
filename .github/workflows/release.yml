@@ -33,7 +33,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/trust-extract
-          cp .lake/build/bin/trust-extract lean-toolchain LICENSE README.md scripts/examples.py dist/trust-extract/
+          cp .lake/build/bin/trust-extract lean-toolchain LICENSE README.md scripts/examples.py scripts/attributes.py dist/trust-extract/
           tar -C dist -czf trust-extract-linux-x86_64.tar.gz trust-extract
           sha256sum trust-extract-linux-x86_64.tar.gz > SHA256SUMS
       - name: Publish
