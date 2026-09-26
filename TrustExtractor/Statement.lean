@@ -25,7 +25,8 @@ defined under them.
   `ℕ` that says what `Nat` is. `--no-refs` leaves them out.
 
 The `signature` facet is each node's signature as Lean prints it (`name (x : α) … : β`), for
-project and upstream nodes alike: what a hover shows for a constant. Both facets are computed in
+project and upstream nodes alike: what a hover shows for a constant. With `refs`, it records the
+constants it names as the statement facet does, the declaration's own name left out. Both facets are computed in
 parallel chunks, each with its own `MetaM` run.
 -/
 
@@ -190,8 +191,18 @@ def statementRows (env : Environment) (targets : Array (Name × ConstantInfo × 
   rowsInParallel env targets fun (name, info, isProp) => statementRow name info isProp withRefs
 
 /-- The `signature` facet rows of `names`: each constant's signature as Lean prints it. -/
-def signatureRows (env : Environment) (names : Array Name) : IO (Array Json) :=
+def signatureRows (env : Environment) (names : Array Name) (withRefs : Bool := false) :
+    IO (Array Json) :=
   rowsInParallel env names fun name => do
+    if withRefs then
+      let fwi ← withOptions (fun o => (ppOptions 400 o).setBool `pp.tagAppFns true)
+        (PrettyPrinter.ppSignature name)
+      let tt := Widget.TaggedText.prettyTagged fwi.fmt (w := 100)
+      let ((), (out, _, refs)) := (layOut fwi.infos tt).run (#[], 0, #[])
+      let text := String.join out.toList
+      let refs := (cleanRefs text refs).filter (·.2.2 != name)
+      return Json.mkObj [("decl", toJson name.toString), ("text", toJson text),
+        ("refs", Json.arr (refs.map fun (s, t, c) => Json.arr #[toJson s, toJson t, toJson c.toString]))]
     let fwi ← withOptions (ppOptions 400) (PrettyPrinter.ppSignature name)
     return Json.mkObj [("decl", toJson name.toString), ("text", toJson (fwi.fmt.pretty 100))]
 

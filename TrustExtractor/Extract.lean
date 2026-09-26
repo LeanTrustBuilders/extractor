@@ -92,6 +92,9 @@ structure Config where
   signatures : Bool := true
   /-- Whether the `docstring` facet covers upstream nodes too, not only the project's. -/
   upstreamDocs : Bool := true
+  /-- Follow dependencies past the project, along this notion: the upstream declarations reached
+  become nodes with edges of their own (`upstream-<notion>`). None stops at the project. -/
+  upstreamClosure : Option MeaningGraph.Follow := none
 
 /-- The kind of a declaration, as recorded in `decls.jsonl`. -/
 def kindOf (env : Environment) (name : Name) (info : ConstantInfo) : String :=
@@ -187,6 +190,18 @@ def NodeInfo.ofJson (j : Json) : Except String NodeInfo := do
 /-- The notions of dependency, in the order their edge files are written. -/
 def notionNames : Array String := #["statement", "meaning", "term"]
 
+/-- A notion's name on the command line and in `meta.json`. -/
+def followName : MeaningGraph.Follow → String
+  | .statement => "statement"
+  | .meaning => "meaning"
+  | .term => "term"
+
+def followOfName? : String → Option MeaningGraph.Follow
+  | "statement" => some .statement
+  | "meaning" => some .meaning
+  | "term" => some .term
+  | _ => none
+
 def notionDescription : String → String
   | "statement" => "the constants the declaration's type mentions"
   | "meaning" => "what the declaration means: its statement for a proof; its statement and the \
@@ -213,6 +228,8 @@ structure Part where
   owned : Array Name
   /-- For each owned declaration, its targets under each notion (in `notionNames` order). -/
   edges : Array (Name × Array (Array Name))
+  /-- For each upstream declaration the closure reached, its targets under each notion. -/
+  upstreamEdges : Array (Name × Array (Array Name)) := #[]
   /-- Facet rows, by facet name. -/
   facets : Array (FacetInfo × Array Json)
   /-- The number of modules the part imported. -/
@@ -230,6 +247,9 @@ def Part.asJson (p : Part) : Json :=
     ("edges", Json.arr (p.edges.map fun (n, ts) =>
       Json.mkObj [("decl", toJson n.toString),
         ("targets", toJson (ts.map (·.map toString)))])),
+    ("upstreamEdges", Json.arr (p.upstreamEdges.map fun (n, ts) =>
+      Json.mkObj [("decl", toJson n.toString),
+        ("targets", toJson (ts.map (·.map toString)))])),
     ("facets", Json.arr (p.facets.map fun (f, rows) =>
       Json.mkObj [("name", toJson f.name), ("schema", toJson f.schema),
         ("description", toJson f.description), ("rows", Json.arr rows)])),
@@ -241,9 +261,12 @@ def Part.asJson (p : Part) : Json :=
 def Part.ofJson (j : Json) : Except String Part := do
   let nodes ← (← j.getObjValAs? (Array Json) "nodes").mapM NodeInfo.ofJson
   let owned := (← j.getObjValAs? (Array String) "owned").map (·.toName)
-  let edges ← (← j.getObjValAs? (Array Json) "edges").mapM fun e => do
-    let ts ← e.getObjValAs? (Array (Array String)) "targets"
-    return ((← e.getObjValAs? String "decl").toName, ts.map (·.map (·.toName)))
+  let edgesOf (key : String) : Except String (Array (Name × Array (Array Name))) := do
+    (← j.getObjValAs? (Array Json) key).mapM fun e => do
+      let ts ← e.getObjValAs? (Array (Array String)) "targets"
+      return ((← e.getObjValAs? String "decl").toName, ts.map (·.map (·.toName)))
+  let edges ← edgesOf "edges"
+  let upstreamEdges ← edgesOf "upstreamEdges"
   let facets ← (← j.getObjValAs? (Array Json) "facets").mapM fun f => do
     return ({ name := ← f.getObjValAs? String "name", schema := ← f.getObjValAs? String "schema"
               description := ← f.getObjValAs? String "description" },
@@ -252,7 +275,8 @@ def Part.ofJson (j : Json) : Except String Part := do
   let packages ← (← j.getObjValAs? (Array Json) "packages").mapM fun q => do
     return (← q.getObjValAs? String "name", ← q.getObjValAs? (Array String) "modules",
       ← q.getObjValAs? (Array String) "requires")
-  return { nodes, owned, edges, facets, imported := ← j.getObjValAs? Nat "imported", modules, packages }
+  return { nodes, owned, edges, upstreamEdges, facets, imported := ← j.getObjValAs? Nat "imported",
+           modules, packages }
 
 /-- `path` relative to the directory `cwd`, as the dataset records source paths. -/
 def relativePath (cwd path : System.FilePath) : String :=
@@ -298,7 +322,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   let proofs := (ownedInfos.zip ownedProp).filterMap fun (ni, p) => if p then some ni else none
   let others := (ownedInfos.zip ownedProp).filterMap fun (ni, p) => if p then none else some ni
   let computed := ctx.depsOf proofs { deps := cfg.term, dataDeps := false } ++
-    ctx.depsOf others { deps := cfg.term }
+    ctx.depsOf others { deps := cfg.term || cfg.upstreamClosure == some .term }
   let byName : Std.HashMap Name MeaningGraph.DeclDeps := computed.foldl (fun m (n, d) => m.insert n d) {}
   let deps : Array (Name × Array (Array Name)) := (ownedInfos.zip ownedProp).map fun ((n, _), p) =>
     let d := byName.getD n default
@@ -308,12 +332,34 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   -- Nodes: the owned declarations, and the targets of their statement and meaning edges.
   let ownedSet : Std.HashSet Name := owned.foldl (·.insert ·) {}
   let mut others : Std.HashSet Name := {}
-  for (_, d) in deps do
-    for dep in d[0]! ++ d[1]! do
-      if !ownedSet.contains dep && env.contains dep then others := others.insert dep
+  let mut roots : Array Name := #[]
+  for ((_, d), p) in deps.zip ownedProp do
+    -- Under the `term` closure, what a definition's value mentions, proofs included, is followed
+    -- too; a proof's own term never is.
+    let followed := if cfg.upstreamClosure == some .term && !p then d[2]! else #[]
+    for dep in d[0]! ++ d[1]! ++ followed do
+      if !ownedSet.contains dep && !others.contains dep && env.contains dep then
+        others := others.insert dep
+        unless ctx.declModule.contains dep do roots := roots.push dep
+  -- Past the project: the closure of those upstream targets, along the notion asked for, with
+  -- MeaningGraph's boundary lifted. Each declaration reached is a node, with edges of its own.
+  let mut upstreamEdges : Array (Name × Array (Array Name)) := #[]
+  let mut reachedProp : Std.HashMap Name Bool := {}
+  if let some follow := cfg.upstreamClosure then
+    let ctxU := { ctx with options := { ctx.options with boundary := .none } }
+    let (reached, _) ← runMetaM env (ctxU.closure roots follow
+      (forData := { deps := cfg.term, dataDeps := true }))
+    for r in reached do
+      others := others.insert r.name
+      reachedProp := reachedProp.insert r.name r.isProp
+      let d := r.deps
+      upstreamEdges := upstreamEdges.push (r.name,
+        #[d.typeDeps, if r.isProp then d.typeDeps else d.dataDeps, if r.isProp then #[] else d.deps])
+    progress t0 s!"upstream closure along {followName follow}: {reached.size} declarations"
   let otherInfos := others.toArray.filterMap fun n => (env.find? n).map (n, ·)
   let otherProp ← runMetaM env do
-    otherInfos.mapM fun (_, info) => do
+    otherInfos.mapM fun (n, info) => do
+      if let some p := reachedProp.get? n then return p
       if info matches .thmInfo _ then return true
       try Meta.isProp info.type catch _ => return false
   let infos := ownedInfos ++ otherInfos
@@ -338,6 +384,11 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
 
   -- Edges, by name.
   let edges := deps
+  let upstreamData : Array (Name × ConstantInfo × Bool) :=
+    if cfg.upstreamClosure.isSome then
+      (otherInfos.zip otherProp).filterMap fun ((n, i), p) =>
+        if p || !reachedProp.contains n then none else some (n, i, p)
+    else #[]
 
   -- Facets.
   let mut facets : Array (FacetInfo × Array Json) := #[]
@@ -391,18 +442,20 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
     progress t0 "axioms facet"
 
   if cfg.statements then
-    let rows ← statementRows env ((ownedInfos.zip ownedProp).map fun ((n, i), p) => (n, i, p)) cfg.refs
+    let rows ← statementRows env
+      ((ownedInfos.zip ownedProp).map (fun ((n, i), p) => (n, i, p)) ++ upstreamData) cfg.refs
     facets := facets.push (facetInfo "statement" "statement/1" "the declaration's statement taken \
         apart: its binders (name, pretty-printed type, role: type, variable, hypothesis or \
         instance), the conclusion under them, and for a definition its body, for a structure its \
         fields, for another inductive type its constructors; pretty-printed by Lean, `⋯` marking \
         what a bounded printer cut; with each text, `refs`: the span and name of each constant it \
-        names, and with each binder the `head` constant of its type", rows)
+        names, and with each binder the `head` constant of its type. Project nodes, and with an \
+        upstream closure the upstream nodes it reached that are not proofs", rows)
     progress t0 "statement facet"
   if cfg.signatures then
-    let rows ← signatureRows env nodeNames
+    let rows ← signatureRows env nodeNames cfg.refs
     facets := facets.push (facetInfo "signature" "signature/1" "every node's signature as Lean prints \
-        it (`name (x : α) … : β`), for hovers", rows)
+        it (`name (x : α) … : β`), for hovers; with `refs`, as in the statement facet", rows)
     progress t0 "signature facet"
 
   -- Annotations on any node. Several parts may report the same one; the merge keeps one copy.
@@ -448,7 +501,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   let packages := pkgModules.toArray.map fun (p, ms) =>
     (p, ms, ((pkgRequires.getD p {}).toArray.qsort (· < ·)))
 
-  return { nodes, owned, edges, facets, imported := env.header.moduleNames.size,
+  return { nodes, owned, edges, upstreamEdges, facets, imported := env.header.moduleNames.size,
            modules := moduleRows, packages }
 
 
@@ -524,6 +577,33 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
       ("format", toJson "i32le-pairs"), ("count", toJson count),
       ("description", toJson (notionDescription notion))]
 
+  -- Upstream edges, from the upstream nodes the closure reached.
+  if let some follow := cfg.upstreamClosure then
+    let mut upTargets : Std.HashMap Name (Array (Array Name)) := {}
+    for p in parts do
+      for (n, ts) in p.upstreamEdges do
+        if !upTargets.contains n then upTargets := upTargets.insert n ts
+    for h : k in [0:notionNames.size] do
+      let notion := notionNames[k]
+      if notion == "term" && !cfg.term then continue
+      let mut buf : ByteArray := .empty
+      let mut count := 0
+      for n in upstreamNodes do
+        let some src := ids.get? n.name | continue
+        let some ts := upTargets.get? n.name | continue
+        for t in ts[k]! do
+          if let some tgt := ids.get? t then
+            buf := pushI32LE (pushI32LE buf src) tgt
+            count := count + 1
+      let name := s!"upstream-{notion}"
+      IO.FS.writeBinFile (cfg.out / "edges" / s!"{name}.bin") buf
+      edgeEntries := edgeEntries.push <| Json.mkObj [
+        ("name", toJson name), ("file", toJson s!"edges/{name}.bin"),
+        ("format", toJson "i32le-pairs"), ("count", toJson count),
+        ("description", toJson (s!"{notionDescription notion}, from the upstream nodes the \
+          closure along `{followName follow}` reached" ++
+          (if notion == "term" then " that are not proofs" else "")))]
+
   -- Facets: rows merged by facet, in node order, one row per declaration.
   let mut facetMeta : Std.HashMap String FacetInfo := {}
   let mut facetRows : Std.HashMap String (Std.HashMap Name Json) := {}
@@ -592,6 +672,11 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
     ("packages", Json.arr packagesJson),
     ("edges", toJson edgeEntries),
     ("facets", toJson facetEntries)]
+  -- Only with an upstream closure: without one, `meta.json` is what it was before there was one.
+  let metaJson := match cfg.upstreamClosure with
+    | some f => metaJson.setObjVal! "upstreamClosure"
+        (Json.mkObj [("follow", toJson (followName f)), ("display", toJson "authored")])
+    | none => metaJson
   IO.FS.writeFile (cfg.out / "meta.json") (metaJson.pretty ++ "\n")
   progress t0 s!"wrote {cfg.out}"
 
@@ -613,7 +698,10 @@ partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Nam
     (if cfg.statements then #[] else #["--no-statements"]) ++
     (if cfg.refs then #[] else #["--no-refs"]) ++ (if cfg.signatures then #[] else #["--no-signatures"]) ++
     (if cfg.upstreamDocs then #[] else #["--no-upstream-docs"]) ++
-    (if cfg.term then #[] else #["--no-term"])
+    (if cfg.term then #[] else #["--no-term"]) ++
+    (match cfg.upstreamClosure with
+      | some f => #["--upstream-closure", followName f]
+      | none => #[])
   progress t0 s!"part {label}: {mods.size} modules"
   let child ← IO.Process.spawn { cmd := (← IO.appPath).toString, args, stdin := .null }
   let code ← child.wait
