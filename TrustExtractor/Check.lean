@@ -61,8 +61,11 @@ structure Config where
   decls : Array String := #[]
   /-- Edges to leave out, by name (source, target): for testing the check itself. -/
   dropEdges : Array (String × String) := #[]
-  /-- How many checks to run at once. -/
+  /-- How many checks to run at once, as threads of this process. -/
   jobs : Nat := 1
+  /-- Check only the declarations whose position among those to check is `k` modulo `n`
+  (`--shard k/n`): to spread a check over processes. -/
+  shard : Nat × Nat := (0, 1)
   /-- The kernel's heartbeat limit per check, in thousands (0: none). -/
   heartbeats : Nat := 0
   /-- Whether to write the result into the dataset, as a facet. -/
@@ -447,6 +450,8 @@ def check (cfg : Config) : IO (Array Row) := do
     match byString.get? g.names[i] with
     | some n => todo := todo.push (i, n)
     | none => absent := absent + 1
+  let (k, nShards) := cfg.shard
+  todo := (todo.zipIdx.filter fun (_, j) => j % max 1 nShards == k).map (·.1)
   if absent > 0 then
     IO.eprintln s!"warning: {absent} project nodes of the dataset are not in the environment: \
       is the project built at the dataset's commit?"
@@ -513,16 +518,9 @@ def check (cfg : Config) : IO (Array Row) := do
     jobs := jobs.push (i, b, closure.toList.eraseDups.toArray)
   progress t0 s!"checking {jobs.size} declarations along `{cfg.notion}`"
 
-  let run (js : Array (Nat × Name × Array Name)) : Array (Nat × Verdict) :=
-    js.map fun (i, b, closure) =>
-      (i, checkBlock base blocks unren blockOfName (cfg.heartbeats * 1000) (lazyDecl env ren) b closure)
-  let n := max 1 cfg.jobs
-  let chunk := (jobs.size + n - 1) / n
-  let tasks := (List.range n).toArray.map fun k =>
-    Task.spawn fun _ => run (jobs.extract (k * chunk) ((k + 1) * chunk))
-  let verdicts := tasks.flatMap Task.get
-  progress t0 "checked"
-  verdicts.mapM fun (i, v) => do
+  -- Each verdict is turned into a row inside its task: a kernel exception holds an environment
+  -- (with the closure and the declaration checked), and keeping them all would keep every proof.
+  let toRow (i : Nat) (v : Verdict) : IO Row := do
     let error ← match v.error?, v.skipped? with
       | some e, _ => pure (some (unrenameText projectConsts (← (e.toMessageData {}).toString)))
       | none, some why => pure (some why)
@@ -531,6 +529,19 @@ def check (cfg : Config) : IO (Array Row) := do
       else if v.missing.isEmpty then "ok" else "missing"
     return { decl := g.names[i]!, kernel, missing := v.missing, error,
              unlisted := unlisted.getD i #[] : Row }
+  let run (js : Array (Nat × Name × Array Name)) : IO (Array Row) :=
+    js.mapM fun (i, b, closure) =>
+      toRow i (checkBlock base blocks unren blockOfName (cfg.heartbeats * 1000) (lazyDecl env ren) b closure)
+  let n := max 1 cfg.jobs
+  let chunk := (jobs.size + n - 1) / n
+  let tasks ← (List.range n).toArray.mapM fun k =>
+    IO.asTask (run (jobs.extract (k * chunk) ((k + 1) * chunk)))
+  let mut rows := #[]
+  for t in tasks do
+    rows := rows ++ (← IO.ofExcept t.get)
+  progress t0 "checked"
+  return rows
+
 /-- The facet's name for a notion. -/
 def facetName (notion : String) : String := s!"check.kernel.{notion}"
 
@@ -553,7 +564,8 @@ def run (cfg : Config) : IO Nat := do
   for r in rows do
     if !r.unlisted.isEmpty then
       IO.println s!"  unlisted {r.decl}: {", ".intercalate (r.unlisted.map toString).toList}"
-  if cfg.write && cfg.dropEdges.isEmpty then
+  -- A shard, or a check with edges dropped, has no facet to write: it saw part of the dataset.
+  if cfg.write && cfg.dropEdges.isEmpty && cfg.shard.2 ≤ 1 then
     let name := facetName cfg.notion
     let file := s!"facets/{name}.jsonl"
     IO.FS.createDirAll (cfg.dataset / "facets")
