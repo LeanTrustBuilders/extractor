@@ -77,6 +77,21 @@ if (cd "$work/b" && lake env "$bin" check --root Fixture --dataset "$work/out-b"
 fi
 echo "ok: the kernel checks every closure, and catches a dropped edge"
 
+# The examples facet, from the sources: the fixture's one example names `double`.
+cp -r "$work/out-b" "$work/out-b-examples"
+python3 "$root/scripts/examples.py" --dataset "$work/out-b-examples" --source "$work/b" > /dev/null
+python3 - "$work/out-b-examples" <<'EOF3'
+import json, sys
+from pathlib import Path
+d = Path(sys.argv[1])
+rows = {json.loads(l)["decl"]: json.loads(l) for l in (d / "facets" / "examples.jsonl").read_text().splitlines()}
+assert list(rows) == ["Fixture.double"], rows
+[ex] = rows["Fixture.double"]["examples"]
+assert ex["path"] == "Fixture/Uses.lean" and ex["statement"] == "example : double 2 = 4" and not ex["sorry"], ex
+assert any(f["name"] == "examples" and f["schema"] == "examples/1" for f in json.loads((d / "meta.json").read_text())["facets"])
+EOF3
+echo "ok: the examples facet finds the fixture's example"
+
 (cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b-partial" --commit B --repo test/fixture --skip-module Fixture.Uses)
 python3 "$here/check_partial.py" "$work/out-b" "$work/out-b-partial"
 

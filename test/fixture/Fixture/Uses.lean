@@ -18,4 +18,7 @@ theorem isDouble_double (n : Nat) : IsDouble n (double n) := by unfold IsDouble 
 theorem IsDouble.unique {n a b : Nat} (ha : IsDouble n a) (hb : IsDouble n b) : a = b := by
   unfold IsDouble at *; omega
 
+-- A unit test: an `example`, which the compiled library does not keep (scripts/examples.py finds it).
+example : double 2 = 4 := rfl
+
 end Fixture
