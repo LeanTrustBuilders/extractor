@@ -46,7 +46,8 @@ Check 2 of the suite's self-checks: Lean's kernel checks each project declaratio
 closure as a dataset records it, and names what the closure lacks:
 
   lake env trust-extract check --root <Prefix> --dataset <dir> [options]
-  --notion <meaning|term>  the closures to check (default: meaning, proofs erased)
+  --notion <meaning|term>  the closures to check (default: meaning, proofs erased). `term` checks
+                           every proof: optional, for small libraries (see the README)
   --module <Module>        import this module and check its declarations (repeatable; default:
                            the dataset's modules)
   --decl <Name>            check this declaration only (repeatable)

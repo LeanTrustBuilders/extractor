@@ -178,7 +178,11 @@ and the closure lacks is **missing**; the check adds it and runs again, to name 
 
 - `--notion meaning` (the default) erases proofs first, with a pass of its own: an argument whose
   expected type is a proposition becomes `sorryAx` of that type, and theorems are added and checked
-  as axioms (their statements). `--notion term` keeps values whole and checks every proof.
+  as axioms (their statements). This is the check that matters: coverage and staleness rest on
+  the `meaning` graph.
+- `--notion term` keeps values whole and checks every proof: it re-runs the kernel over the whole
+  library, one declaration at a time. It is **optional, for small libraries**: on Tau Ceti it runs
+  out of memory (see *Known issue* below).
 - The project's constants are renamed in everything the check adds, so a reference to one it did not
   add cannot find the imported original.
 - It also lists what D **mentions**, through helpers, that its closure lacks (`unlisted`): stricter
@@ -189,15 +193,29 @@ and the closure lacks is **missing**; the check adds it and runs again, to name 
 
 It must run on the dataset's toolchain, in the project as built at the dataset's commit.
 `--drop-edge A B` leaves an edge out, to test the check; `--strict` exits with 1 on any failure.
-`--shard k/n` checks every n-th declaration, to spread a check over processes: along `term`, on a
-library the size of Tau Ceti, checking proofs in many threads of one process used far more memory
-than the same work in several processes of one thread each. On
+`--shard k/n` checks every n-th declaration, to spread a check over processes. On
 LeanMachineLearning (1,452 declarations) both notions check everything in about 3 seconds with
 `--jobs 8`. Dropping edges one at a time, the kernel caught all 39 removals that left a declaration's
 `meaning` closure without the target, except 2 proofs written inside a statement, which `meaning`
 counts but the kernel does not need once proofs are erased; and all 17 such removals along `term`.
 Under the rule `ltb-meaning/1` (0.7.0), every closure of LeanMachineLearning checks, along both
 notions, and no declaration mentions anything its closure lacks.
+
+**Known issue: `term` on large libraries.** On Tau Ceti at 8befae0 (a quarter of its modules at a
+time, 23,706 declarations, 62 GB of memory), the check's memory grows as the kernel checks proofs,
+until the machine runs out:
+- with 4 threads, it grew by about 7 GB every 30 seconds, past 28 GB, and was stopped;
+- as 6 single-thread processes (`--shard`), available memory fell to 7 GB and they were stopped;
+  3 of the 6 had finished (11,853 declarations, all passing);
+- with one thread, it stayed at 6 GB for the 2½ minutes observed: too short to tell;
+- with the proofs renamed but not given to the kernel, or not made at all, it stays at 6 GB. So the
+  growth comes from the kernel's checks of the proofs, or from what they leave behind.
+
+Not investigated further: whether something outlives each kernel check (a cache in the C++ kernel,
+the allocator across threads). An earlier version also copied every proof of the environment
+before checking and ran out at 35 GB; that is fixed. `meaning` has no such issue: all 95,688
+closures of Tau Ceti check in about 5 minutes, at most 9 GB. On LeanMachineLearning, `term` takes
+3 seconds and 3.5 GB.
 
 ## Build
 
