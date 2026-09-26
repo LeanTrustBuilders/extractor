@@ -168,8 +168,8 @@ partial def erase (e : Expr) : EraseM Expr := do
       let v' ← if ← isProp t then pure (mkSorry t') else erase v
       withLetDecl n t v (nondep := nondep) fun x => do
         return .letE n t' v' ((← erase (b.instantiate1 x)).abstract #[x]) nondep
-    | .mdata m b => return .mdata m (← erase b)
-    | .proj s i b => return .proj s i (← erase b)
+    | .mdata m b => pure (.mdata m (← erase b))
+    | .proj s i b => pure (.proj s i (← erase b))
     | _ => pure e
   modify (·.insert e r)
   return r
