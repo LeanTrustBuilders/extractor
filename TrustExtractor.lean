@@ -3,3 +3,4 @@ import TrustExtractor.Hash
 import TrustExtractor.Source
 import TrustExtractor.Packages
 import TrustExtractor.Extract
+import TrustExtractor.Check
