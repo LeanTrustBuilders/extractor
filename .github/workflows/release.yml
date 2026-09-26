@@ -1,7 +1,7 @@
 name: Release
 
-# A release is cut per Lean toolchain: the tag names the toolchain the binary reads `.olean` files
-# of (`v4.34.0-rc2`, optionally with a suffix: `v4.34.0-rc2-1`).
+# A release is cut per extractor version and Lean toolchain: the tag names both, the toolchain being
+# the one the binary reads `.olean` files of (`v0.2.0-lean-v4.34.0`).
 on:
   push:
     tags: ["v*"]

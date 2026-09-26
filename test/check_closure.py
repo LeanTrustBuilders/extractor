@@ -19,9 +19,9 @@ F = "Fixture."
 def main() -> int:
     plain, full = load(Path(sys.argv[1])), load(Path(sys.argv[2]))
     m = full["meta"]
-    check(m.get("upstreamClosure") == {"follow": "term", "display": "authored"}, "meta: upstreamClosure")
+    check(m.get("upstreamClosure") == {"follow": "term", "display": "declared"}, "meta: upstreamClosure")
     check("upstreamClosure" not in plain["meta"], "meta: no upstreamClosure without the option")
-    check({e["name"] for e in m["edges"]} == {"statement", "meaning", "term", "upstream-statement",
+    check({e["name"] for e in m["edges"]} == {"statement", "meaning", "term", "source", "upstream-statement",
                                              "upstream-meaning", "upstream-term"}, "meta: edge notions")
 
     # The project's part is what it was.
@@ -40,8 +40,8 @@ def main() -> int:
 
     # Upstream edges, and what they stop at.
     ust, ume, ute = (full["edges"][f"upstream-{n}"] for n in ("statement", "meaning", "term"))
-    check("HAdd" in ust.get("HAdd.hAdd", set()), "HAdd.hAdd's statement: a projection, looked through to HAdd")
-    check("HAdd.hAdd" not in up_full - up_plain, "the closure adds no projection of its own")
+    check("HAdd.hAdd" not in full["by_name"] and "HAdd" in up_full,
+          "a projection is not a node: it is looked through, to its structure")
     check("Nat.one_pos" not in full["by_name"], "a lemma called only by a project proof is not reached")
     proofs = {d["name"] for d in full["decls"] if d["scope"] == "upstream" and d["isProp"]}
     check(proofs, "the closure reaches upstream proofs, through definitions' values")

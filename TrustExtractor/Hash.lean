@@ -2,7 +2,11 @@ import SemanticHash
 import TrustExtractor.Util
 
 /-!
-# The three hashes of a declaration key
+# The hashes datasets had before the rule `ltb-meaning/1`
+
+Since `ltb-dataset/1`, a declaration's meaning and local hashes are the rule's
+(`MeaningGraph.Hash`), and its content hash is semantic_hash's proof-relevant hash. Datasets still
+carry, as `legacy`, the two hashes described here, so that records keyed by them can be compared:
 
 * **meaning**: semantic_hash's proof-irrelevant hash. Deep: a referenced constant contributes its own
   hash, so it changes when anything the declaration's statement or data rests on changes meaning.
@@ -21,9 +25,12 @@ namespace TrustExtractor
 
 open Lean
 
-/-- The name of the local hash function, recorded in `meta.json`. Bump it whenever `localHash`
-changes, since stored reviews compare against it. -/
-def localHasherName : String := "ltb-local-v1"
+/-- The name of the legacy local hash function, recorded in `meta.json`. -/
+def legacyLocalHasherName : String := "ltb-local-v1"
+
+/-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
+whenever that changes, since stored records compare against it. -/
+def localHasherName : String := "ltb-local/2"
 
 /-- The local hash of a declaration: its own statement and data, references by name.
 
