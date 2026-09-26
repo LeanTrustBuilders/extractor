@@ -1,0 +1,95 @@
+name: Extract a dataset
+description: >-
+  Extract the dataset (S2) of a built Lean library with the newest trust-extract release for its
+  toolchain, add the examples facet, and publish it as a release of this repository if asked.
+inputs:
+  root:
+    description: The library's root module (TauCeti, LeanMachineLearning).
+    required: true
+  repo:
+    description: The library's repository, owner/name, for links into its sources.
+    default: ''
+  directory:
+    description: The library's checkout, built (its lean-toolchain says which release to use).
+    default: '.'
+  out:
+    description: Where to write the dataset (default $RUNNER_TEMP/dataset).
+    default: ''
+  args:
+    description: More arguments to `trust-extract extract` (--parts, --no-statements, …).
+    default: ''
+  examples:
+    description: Add the `examples` facet, the library's `example`s read from its sources.
+    default: 'true'
+  publish:
+    description: Publish the dataset as this release tag of the current repository (dataset-<commit12>).
+    default: ''
+  replace:
+    description: When the release exists, replace its dataset.
+    default: 'false'
+  title:
+    description: The release's title.
+    default: ''
+  token:
+    description: A token that can read the extractor's releases and write this repository's.
+    default: ${{ github.token }}
+outputs:
+  dataset:
+    description: The dataset's directory.
+    value: ${{ steps.extract.outputs.dataset }}
+  version:
+    description: trust-extract's version line.
+    value: ${{ steps.extract.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: extract
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        ROOT: ${{ inputs.root }}
+        LIB_REPO: ${{ inputs.repo }}
+        DIRECTORY: ${{ inputs.directory }}
+        OUT: ${{ inputs.out }}
+        ARGS: ${{ inputs.args }}
+        EXAMPLES: ${{ inputs.examples }}
+      run: |
+        dir="$RUNNER_TEMP/trust-extract-release"
+        tag=$("$GITHUB_ACTION_PATH/../ci/release.sh" install "$DIRECTORY/lean-toolchain" "$dir")
+        bin="$dir/trust-extract/trust-extract"
+        version=$("$bin" version | head -1)
+        echo "trust-extract release $tag: $version"
+        out=${OUT:-$RUNNER_TEMP/dataset}
+        case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+        # Every imported module maps several files: allow more mappings per process, so that the
+        # extraction needs fewer parts.
+        sudo sysctl -q -w vm.max_map_count=262144 || true
+        (cd "$DIRECTORY" && lake env "$bin" extract --root "$ROOT" ${LIB_REPO:+--repo "$LIB_REPO"} --out "$out" $ARGS)
+        if [ "$EXAMPLES" = "true" ]; then
+          python3 "$dir/trust-extract/examples.py" --dataset "$out" --source "$DIRECTORY"
+        fi
+        du -sh "$out"
+        { echo "dataset=$out"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
+    - if: inputs.publish != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TAG: ${{ inputs.publish }}
+        REPLACE: ${{ inputs.replace }}
+        TITLE: ${{ inputs.title }}
+        DATASET: ${{ steps.extract.outputs.dataset }}
+        VERSION: ${{ steps.extract.outputs.version }}
+      run: |
+        tar -czf "$RUNNER_TEMP/dataset.tar.gz" -C "$DATASET" .
+        read -r spec commit library < <(python3 -c "import json,sys; m=json.load(open(sys.argv[1])); l=m['library']; print(m['spec'], l.get('commit',''), l.get('repo') or l.get('root',''))" "$DATASET/meta.json")
+        notes="The dataset (S2, $spec) of $library at $commit, by $VERSION (LeanTrustBuilders/extractor)."
+        if gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          if [ "$REPLACE" != "true" ]; then echo "$TAG is already published"; exit 0; fi
+          gh release upload "$TAG" "$RUNNER_TEMP/dataset.tar.gz" -R "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes "$notes"
+          echo "replaced the dataset of $TAG"
+        else
+          gh release create "$TAG" "$RUNNER_TEMP/dataset.tar.gz" -R "$GITHUB_REPOSITORY" --latest=false \
+            --title "${TITLE:-Dataset of ${library} ${commit:0:12}}" --notes "$notes"
+          echo "published $TAG"
+        fi

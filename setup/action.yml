@@ -1,0 +1,43 @@
+name: Set up trust-extract
+description: >-
+  Install the newest trust-extract release for a Lean toolchain (the library's lean-toolchain by
+  default), and say which toolchains have one.
+inputs:
+  toolchain:
+    description: A Lean version (4.34.0) or a lean-toolchain file. Empty to only list the toolchains.
+    default: lean-toolchain
+  dir:
+    description: Where to unpack it (default $RUNNER_TEMP/trust-extract-release).
+    default: ''
+  token:
+    description: A token that can read LeanTrustBuilders/extractor's releases.
+    default: ${{ github.token }}
+outputs:
+  bin:
+    description: The trust-extract binary.
+    value: ${{ steps.install.outputs.bin }}
+  scripts:
+    description: The directory of the scripts it ships (examples.py).
+    value: ${{ steps.install.outputs.scripts }}
+  tag:
+    description: The release installed.
+    value: ${{ steps.install.outputs.tag }}
+  toolchains:
+    description: The Lean versions some release supports, space-separated.
+    value: ${{ steps.install.outputs.toolchains }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        DIR: ${{ inputs.dir }}
+      run: |
+        echo "toolchains=$("$GITHUB_ACTION_PATH/../ci/release.sh" toolchains | paste -sd' ')" >> "$GITHUB_OUTPUT"
+        [ -n "$TOOLCHAIN" ] || exit 0
+        dir=${DIR:-$RUNNER_TEMP/trust-extract-release}
+        tag=$("$GITHUB_ACTION_PATH/../ci/release.sh" install "$TOOLCHAIN" "$dir")
+        echo "trust-extract release $tag: $("$dir/trust-extract/trust-extract" version | head -1)"
+        { echo "tag=$tag"; echo "bin=$dir/trust-extract/trust-extract"; echo "scripts=$dir/trust-extract"; } >> "$GITHUB_OUTPUT"

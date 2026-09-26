@@ -30,6 +30,25 @@ the Lean that wrote it. Releases are tagged by extractor version and toolchain:
 `v0.2.0-lean-v4.34.0-rc2` is trust-extract 0.2.0 for `leanprover/lean4:v4.34.0-rc2` (the first release
 was tagged `v4.34.0-rc2`). Take the newest release whose tag ends with `-lean-<your toolchain>`.
 
+**In GitHub Actions**, once the library is built, one step does it, with the newest release for the
+library's toolchain; the dataset then gets the `examples` facet, and, with `publish`, becomes a
+release of the repository running the workflow (which is where evidence-store and the pages look
+for it):
+
+```yaml
+- uses: LeanTrustBuilders/extractor/extract@main
+  with:
+    root: MyProject
+    repo: owner/name
+    directory: path/to/the/checkout      # default: .
+    args: --parts 4                      # anything else for `trust-extract extract`
+    publish: dataset-${{ steps.commit.outputs.sha12 }}   # optional
+```
+
+`LeanTrustBuilders/extractor/setup@main` only installs the release (outputs `bin`, `scripts`, `tag`)
+and lists the toolchains that have one (`toolchains`), for a workflow that picks a commit to
+extract. Both use `ci/release.sh`, which knows the tags.
+
 **Extract from a clean build.** The extractor reads the `.olean` files as they are and cannot tell
 whether they are consistent with each other. A build directory that has gone through several
 commits can hold a module compiled against an older version of one of its imports, and Lake may
