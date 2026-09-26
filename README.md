@@ -164,6 +164,21 @@ to say, on hover, what `ℕ`, `Kernel` or `∀ᵐ` is. They cost about two third
 LeanMachineLearning (3.9 MB to 6.4 MB); `--no-refs`, `--no-signatures` and `--no-upstream-docs`
 leave each part out for a consumer that does not show hovers.
 
+## Unit tests: the `examples` facet
+
+```bash
+python3 scripts/examples.py --dataset dataset --source .
+```
+
+An `example` is elaborated and then discarded, so the compiled library does not keep it and the
+extractor cannot see it; yet it is a unit test of the declarations it names, checked at every build.
+`scripts/examples.py` (shipped with each release, next to the binary) reads the library's sources at
+the dataset's commit, finds every `example`, resolves the names its statement uses as Lean would
+(through the namespaces around it, then those opened), and adds the facet `examples` (schema
+`examples/1`) to the dataset: for each of the library's declarations that some example names, those
+examples, with their statements and whether they use `sorry`. On Tau Ceti at 8befae0 it finds 213
+examples, naming 83 declarations, in 5 seconds.
+
 ## Checking a dataset
 
 ```bash
