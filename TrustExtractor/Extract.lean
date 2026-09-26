@@ -1,4 +1,5 @@
 import MeaningGraph
+import MeaningGraph.Hash
 import SemanticHash
 import TrustAnnotations
 import TrustExtractor.Util
@@ -48,10 +49,10 @@ namespace TrustExtractor
 open Lean
 
 /-- The dataset specification this extractor writes. -/
-def datasetSpec : String := "ltb-dataset/0"
+def datasetSpec : String := "ltb-dataset/1"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.6.0"
+def extractorVersion : String := "0.7.0"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
@@ -169,13 +170,19 @@ structure NodeInfo where
   meaning : Option String
   content : Option String
   localHash : String
+  /-- The hashes datasets had before the rule (spec `ltb-dataset/0`): semantic_hash's
+  proof-irrelevant hash, and the local hash `ltb-local-v1`. Records keyed by them are compared
+  through these. -/
+  legacyMeaning : Option String := none
+  legacyLocal : String := ""
 deriving Inhabited
 
 def NodeInfo.asJson (n : NodeInfo) : Json :=
   Json.mkObj [("name", toJson n.name.toString), ("module", toJson n.module.toString),
     ("pos", toJson n.pos), ("package", toJson n.package), ("project", toJson n.project),
     ("kind", toJson n.kind), ("isProp", toJson n.isProp), ("meaning", toJson n.meaning),
-    ("content", toJson n.content), ("local", toJson n.localHash)]
+    ("content", toJson n.content), ("local", toJson n.localHash),
+    ("legacyMeaning", toJson n.legacyMeaning), ("legacyLocal", toJson n.legacyLocal)]
 
 def NodeInfo.ofJson (j : Json) : Except String NodeInfo := do
   return { name := (← j.getObjValAs? String "name").toName
@@ -185,10 +192,12 @@ def NodeInfo.ofJson (j : Json) : Except String NodeInfo := do
            isProp := ← j.getObjValAs? Bool "isProp"
            meaning := (j.getObjValAs? String "meaning").toOption
            content := (j.getObjValAs? String "content").toOption
-           localHash := ← j.getObjValAs? String "local" }
+           localHash := ← j.getObjValAs? String "local"
+           legacyMeaning := (j.getObjValAs? String "legacyMeaning").toOption
+           legacyLocal := (j.getObjValAs? String "legacyLocal").toOption.getD "" }
 
 /-- The notions of dependency, in the order their edge files are written. -/
-def notionNames : Array String := #["statement", "meaning", "term"]
+def notionNames : Array String := #["statement", "meaning", "term", "source"]
 
 /-- A notion's name on the command line and in `meta.json`. -/
 def followName : MeaningGraph.Follow → String
@@ -203,10 +212,16 @@ def followOfName? : String → Option MeaningGraph.Follow
   | _ => none
 
 def notionDescription : String → String
-  | "statement" => "the constants the declaration's type mentions"
-  | "meaning" => "what the declaration means: its statement for a proof; its statement and the \
-      data of its value, proofs skipped, for a definition"
+  | "statement" => "the declarations the declaration's type mentions, proofs erased, looking through \
+      helpers (rule ltb-meaning/1)"
+  | "meaning" => "what the declaration means, under the rule ltb-meaning/1: the declarations its \
+      content mentions, proofs erased everywhere, looking through helpers. A proof's content is its \
+      statement; a definition's, its statement and value; an inductive type's, its type and \
+      constructors. The closure over these edges is what coverage is computed over, and what the \
+      meaning hash covers"
   | "term" => "the type and the whole value, proofs included, restricted to targets that are nodes"
+  | "source" => "what the declaration's source needs that its elaborated term does not mention: \
+      the coercion instances it relies on, and for a notation what it expands to"
   | _ => ""
 
 /-- A facet's description in `meta.json`. -/
@@ -285,6 +300,20 @@ def relativePath (cwd path : System.FilePath) : String :=
   if s.startsWith c then (s.drop c.length).toString
   else if s.startsWith "./" then (s.drop 2).toString else s
 
+/-- A declaration's `statement` and `meaning` targets under the rule: the declarations its statement,
+and its whole content, mention, looking through helpers (`MeaningGraph.Hash.Walk.targets`). An
+inductive type also rests on the other types of its mutual block that are declarations. -/
+def walkEdges (env : Environment) (w : MeaningGraph.Hash.Walk) (memo : Std.HashMap Name (Array Name))
+    (n : Name) : Array Name × Array Name × Std.HashMap Name (Array Name) :=
+  match w.blocks.get? (MeaningGraph.Hash.blockHead env n) with
+  | none => (#[], #[], memo)
+  | some b =>
+    let (st, memo) := w.targets b.statementMentions memo
+    let (me, memo) := w.targets b.mentions memo
+    let siblings := if b.kind == .induct then b.members.filter fun m => m != n && w.isNode m &&
+        (env.find? m matches some (.inductInfo _)) else #[]
+    (st.filter (· != n), (me ++ siblings).filter (· != n), memo)
+
 /-- Collects one part: imports `mods` and reports on the project declarations of those modules.
 The caller must have run `enableInitializersExecution`, so that the imported modules' extensions
 (among them `TrustAnnotations`') are registered and filled. -/
@@ -297,8 +326,9 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
 
   let moduleOf (n : Name) : Name := (MeaningGraph.moduleNameOf env n).getD .anonymous
 
-  -- The project declarations of the requested modules, in module order.
-  let ctx := MeaningGraph.Context.of env cfg.root
+  -- The project declarations of the requested modules, in module order. Declarations are those a
+  -- person wrote, private ones included (`MeaningGraph.isDeclaration`, the rule `ltb-meaning/1`).
+  let ctx := MeaningGraph.Context.of env cfg.root { display := .declared }
   progress t0 s!"dependency tables: {ctx.constants.size} project constants, {ctx.exposed.size} exposed"
   let mut positions : Std.HashMap Name Nat := {}
   let mut ownedInfos : Array (Name × ConstantInfo) := #[]
@@ -312,49 +342,78 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
       if info matches .thmInfo _ then return true
       try Meta.isProp info.type catch _ => return false
 
-  -- The data of the owned definitions' values, proofs skipped.
-  let ctx ← runMetaM env (ctx.withDataValueConsts (only := some (owned.foldl (·.insert ·) {})))
-  progress t0 s!"data values of {ctx.dataValueConsts.size} definitions"
+  -- The rule's walk: every constant the owned declarations rest on, down to Lean core, with its
+  -- proofs erased and its meaning hash (`MeaningGraph.Hash`). `statement` and `meaning` edges come
+  -- from it.
+  let mut walk ← runMetaM env ((MeaningGraph.Hash.Walk.new env).visit owned)
+  progress t0 s!"meaning walk: {walk.blocks.size} blocks{if walk.unresolved > 0 then s!", {walk.unresolved} unresolved" else ""}"
+  let mut targetMemo : Std.HashMap Name (Array Name) := {}
 
-  -- Dependencies under each notion, from MeaningGraph's lists: `statement` is `typeDeps`; `meaning`
-  -- is `typeDeps` for a proof, whose meaning is its statement, and `dataDeps` otherwise; `term` is
-  -- `deps`. A proof's value, the proof term, is walked only for `term`.
-  let proofs := (ownedInfos.zip ownedProp).filterMap fun (ni, p) => if p then some ni else none
-  let others := (ownedInfos.zip ownedProp).filterMap fun (ni, p) => if p then none else some ni
-  let computed := ctx.depsOf proofs { deps := cfg.term, dataDeps := false } ++
-    ctx.depsOf others { deps := cfg.term || cfg.upstreamClosure == some .term }
+  -- `term` is MeaningGraph's `deps`: the type and the whole value, proofs included, looking through
+  -- helpers, upstream ones too, so that its targets are declarations under the same rule. `source`
+  -- is what the source needs besides: coercion instances and notation.
+  let ctxT := { ctx with options := { ctx.options with boundary := .none } }
+  let computed := if cfg.term || cfg.upstreamClosure == some .term then
+      ctxT.depsOf ownedInfos { deps := true, dataDeps := false } else #[]
   let byName : Std.HashMap Name MeaningGraph.DeclDeps := computed.foldl (fun m (n, d) => m.insert n d) {}
-  let deps : Array (Name × Array (Array Name)) := (ownedInfos.zip ownedProp).map fun ((n, _), p) =>
-    let d := byName.getD n default
-    (n, #[d.typeDeps, if p then d.typeDeps else d.dataDeps, d.deps])
+  let mut deps : Array (Name × Array (Array Name)) := #[]
+  let mut sourceCache : MeaningGraph.Cache := {}
+  for ((n, info), p) in ownedInfos.zip ownedProp do
+    let (st, me, memo) := walkEdges env walk targetMemo n
+    targetMemo := memo
+    let (src, cache) := ctxT.sourceDeps sourceCache n info
+    sourceCache := cache
+    let term := if cfg.term then (byName.getD n default).deps else #[]
+    deps := deps.push (n, #[st, if p then st else me, term, src])
   progress t0 s!"dependencies of {deps.size} project declarations"
 
   -- Nodes: the owned declarations, and the targets of their statement and meaning edges.
   let ownedSet : Std.HashSet Name := owned.foldl (·.insert ·) {}
   let mut others : Std.HashSet Name := {}
   let mut roots : Array Name := #[]
-  for ((_, d), p) in deps.zip ownedProp do
+  for ((n, d), p) in deps.zip ownedProp do
     -- Under the `term` closure, what a definition's value mentions, proofs included, is followed
     -- too; a proof's own term never is.
-    let followed := if cfg.upstreamClosure == some .term && !p then d[2]! else #[]
+    let followed := if cfg.upstreamClosure == some .term && !p then (byName.getD n default).deps else #[]
     for dep in d[0]! ++ d[1]! ++ followed do
       if !ownedSet.contains dep && !others.contains dep && env.contains dep then
         others := others.insert dep
         unless ctx.declModule.contains dep do roots := roots.push dep
-  -- Past the project: the closure of those upstream targets, along the notion asked for, with
-  -- MeaningGraph's boundary lifted. Each declaration reached is a node, with edges of its own.
+  -- Past the project: the closure of those upstream targets, along the notion asked for. Each
+  -- declaration reached is a node, with edges of its own. Along `statement` and `meaning` the
+  -- closure follows the walk's edges; along `term`, MeaningGraph's, with its boundary lifted.
   let mut upstreamEdges : Array (Name × Array (Array Name)) := #[]
   let mut reachedProp : Std.HashMap Name Bool := {}
   if let some follow := cfg.upstreamClosure then
-    let ctxU := { ctx with options := { ctx.options with boundary := .none } }
-    let (reached, _) ← runMetaM env (ctxU.closure roots follow
-      (forData := { deps := cfg.term, dataDeps := true }))
-    for r in reached do
-      others := others.insert r.name
-      reachedProp := reachedProp.insert r.name r.isProp
-      let d := r.deps
-      upstreamEdges := upstreamEdges.push (r.name,
-        #[d.typeDeps, if r.isProp then d.typeDeps else d.dataDeps, if r.isProp then #[] else d.deps])
+    let mut reached : Array (Name × Bool × Array Name) := #[]
+    if follow == .term then
+      let (rs, _) ← runMetaM env (ctxT.closure roots follow (forData := { deps := true, dataDeps := false }))
+      reached := rs.map fun r => (r.name, r.isProp, if r.isProp then #[] else r.deps.deps)
+      walk ← runMetaM env (walk.visit (reached.map (·.1)))
+    else
+      let mut seen : Std.HashSet Name := roots.foldl (·.insert ·) {}
+      let mut queue := roots
+      let mut i := 0
+      while i < queue.size do
+        let u := queue[i]!
+        i := i + 1
+        let (st, me, memo) := walkEdges env walk targetMemo u
+        targetMemo := memo
+        let p ← runMetaM env do
+          match env.find? u with
+          | some info => MeaningGraph.isProofDecl info
+          | none => pure false
+        reached := reached.push (u, p, #[])
+        for t in (if follow == .statement then st else me) do
+          if !seen.contains t && !ctx.declModule.contains t then
+            seen := seen.insert t
+            queue := queue.push t
+    for (u, p, term) in reached do
+      others := others.insert u
+      reachedProp := reachedProp.insert u p
+      let (st, me, memo) := walkEdges env walk targetMemo u
+      targetMemo := memo
+      upstreamEdges := upstreamEdges.push (u, #[st, if p then st else me, term, #[]])
     progress t0 s!"upstream closure along {followName follow}: {reached.size} declarations"
   let otherInfos := others.toArray.filterMap fun n => (env.find? n).map (n, ·)
   let otherProp ← runMetaM env do
@@ -365,22 +424,32 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   let infos := ownedInfos ++ otherInfos
   let isProp := ownedProp ++ otherProp
   let nodeNames := infos.map (·.1)
+  -- Hashes: the rule's meaning and local hashes; semantic_hash's proof-relevant hash as the content
+  -- hash; and, for records keyed before the rule, the hashes datasets had then.
+  walk ← runMetaM env (walk.visit nodeNames)
   let hashes ← SemanticHash.Hashing.runBoth env
   progress t0 "semantic hashes"
+  let byUserName : Std.HashMap Name Name :=
+    nodeNames.foldl (fun m n => m.insert (privateToUserName n) n) {}
+  let mut localMemo : Std.HashMap (Name × Name) UInt64 := {}
   let search ← labelledSearchPath project
   let pkgCache ← IO.mkRef ({} : Std.HashMap Name String)
   let mut nodes : Array NodeInfo := #[]
   for h : i in [0:infos.size] do
     let (name, info) := infos[i]
     let mod := moduleOf name
+    let (lh, memo) := walk.localHash byUserName name localMemo
+    localMemo := memo
     nodes := nodes.push {
       name, module := mod, pos := positions.getD name 0
       package := ← packageOf search pkgCache mod
       project := MeaningGraph.isProjectLocalConst env cfg.root name
       kind := kindOf env name info, isProp := isProp[i]!
-      meaning := (hashes.proofIrrelHashes.get? name).map hex16
+      meaning := (walk.meaning? name).map hex16
       content := (hashes.fullHashes.get? name).map hex16
-      localHash := hex16 (← (localHash env info : IO UInt64)) }
+      localHash := hex16 lh
+      legacyMeaning := (hashes.proofIrrelHashes.get? name).map hex16
+      legacyLocal := hex16 (← (localHash env info : IO UInt64)) }
 
   -- Edges, by name.
   let edges := deps
@@ -547,7 +616,10 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
     let hs := Json.mkObj <|
       (match n.meaning with | some h => [("meaning", toJson h)] | none => []) ++
       (match n.content with | some h => [("content", toJson h)] | none => []) ++
-      [("local", toJson n.localHash)]
+      [("local", toJson n.localHash)] ++
+      [("legacy", Json.mkObj <|
+        (match n.legacyMeaning with | some h => [("meaning", toJson h)] | none => []) ++
+        [("local", toJson n.legacyLocal)])]
     Json.mkObj [("id", toJson i), ("name", toJson n.name.toString),
       ("module", toJson n.module.toString), ("package", toJson n.package),
       ("scope", toJson (if n.project then "project" else "upstream")), ("kind", toJson n.kind),
@@ -585,7 +657,7 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
         if !upTargets.contains n then upTargets := upTargets.insert n ts
     for h : k in [0:notionNames.size] do
       let notion := notionNames[k]
-      if notion == "term" && !cfg.term then continue
+      if (notion == "term" && !cfg.term) || notion == "source" then continue
       let mut buf : ByteArray := .empty
       let mut count := 0
       for n in upstreamNodes do
@@ -663,9 +735,13 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
       ("unavailable", toJson (unavailable.map toString))]),
     ("toolchain", toJson toolchain),
     ("lean", Json.mkObj [("version", toJson Lean.versionString), ("githash", toJson Lean.githash)]),
-    ("hasher", Json.mkObj [("name", toJson "semantic_hash"),
-      ("revision", toJson semanticHashRevision), ("meaning", toJson "proof-irrelevant"),
-      ("content", toJson "proof-relevant"), ("local", toJson localHasherName)]),
+    ("hasher", Json.mkObj [("name", toJson MeaningGraph.Hash.Rule.meaning.name),
+      ("meaning", toJson MeaningGraph.Hash.Rule.meaning.name), ("local", toJson localHasherName),
+      ("content", Json.mkObj [("name", toJson "semantic_hash"),
+        ("revision", toJson semanticHashRevision), ("variant", toJson "proof-relevant")]),
+      ("legacy", Json.mkObj [("name", toJson "semantic_hash"),
+        ("revision", toJson semanticHashRevision), ("meaning", toJson "proof-irrelevant"),
+        ("local", toJson legacyLocalHasherName)])]),
     ("counts", Json.mkObj [("nodes", toJson nodes.size), ("project", toJson projectNodes.size),
       ("upstream", toJson upstreamNodes.size)]),
     ("modules", Json.mkObj [("file", toJson "modules.jsonl"), ("count", toJson moduleList.size)]),
@@ -675,7 +751,7 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
   -- Only with an upstream closure: without one, `meta.json` is what it was before there was one.
   let metaJson := match cfg.upstreamClosure with
     | some f => metaJson.setObjVal! "upstreamClosure"
-        (Json.mkObj [("follow", toJson (followName f)), ("display", toJson "authored")])
+        (Json.mkObj [("follow", toJson (followName f)), ("display", toJson "declared")])
     | none => metaJson
   IO.FS.writeFile (cfg.out / "meta.json") (metaJson.pretty ++ "\n")
   progress t0 s!"wrote {cfg.out}"

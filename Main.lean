@@ -180,6 +180,7 @@ unsafe def main (args : List String) : IO UInt32 := do
       return 1
   | ["version"] =>
     IO.println s!"trust-extract {extractorVersion}, dataset spec {datasetSpec}, \
-      semantic_hash {semanticHashRevision}, local hash {localHasherName}, Lean {Lean.versionString}"
+      meaning hash {MeaningGraph.Hash.Rule.meaning.name}, local hash {localHasherName}, \
+      content hash semantic_hash {semanticHashRevision}, Lean {Lean.versionString}"
     return 0
   | _ => IO.eprintln usage; return 2
