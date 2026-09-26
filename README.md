@@ -151,6 +151,36 @@ to say, on hover, what `ℕ`, `Kernel` or `∀ᵐ` is. They cost about two third
 LeanMachineLearning (3.9 MB to 6.4 MB); `--no-refs`, `--no-signatures` and `--no-upstream-docs`
 leave each part out for a consumer that does not show hovers.
 
+## Checking a dataset
+
+```bash
+lake env trust-extract check --root LeanMachineLearning --dataset dataset --jobs 8
+```
+
+Check 2 of the suite's self-checks (dependency-testing.md §9 in LeanTrustBuilders/design): for every
+project declaration D of a dataset, Lean's kernel checks D in an environment that holds the
+libraries underneath, the project's constants that are not nodes (compiler helpers), and, of the
+project's nodes, only those in D's closure as the dataset's edges draw it. What the kernel needs
+and the closure lacks is **missing**; the check adds it and runs again, to name everything missing.
+
+- `--notion meaning` (the default) erases proofs first, with a pass of its own: an argument whose
+  expected type is a proposition becomes `sorryAx` of that type, and theorems are added and checked
+  as axioms (their statements). `--notion term` keeps values whole and checks every proof.
+- The project's constants are renamed in everything the check adds, so a reference to one it did not
+  add cannot find the imported original.
+- It also lists what D **mentions**, through helpers, that its closure lacks (`unlisted`): stricter
+  than the kernel, which only looks at what it needs.
+- It writes the facet `check.kernel.<notion>` (schema `check.kernel/1`) into the dataset: per
+  declaration, `kernel` is `ok`, `missing` (with the constants), `error` or `skipped`.
+- It proves sufficiency, not minimality, and does not see notation or coercions.
+
+It must run on the dataset's toolchain, in the project as built at the dataset's commit.
+`--drop-edge A B` leaves an edge out, to test the check; `--strict` exits with 1 on any failure. On
+LeanMachineLearning (1,452 declarations) both notions check everything in about 3 seconds with
+`--jobs 8`. Dropping edges one at a time, the kernel caught all 39 removals that left a declaration's
+`meaning` closure without the target, except 2 proofs written inside a statement, which `meaning`
+counts but the kernel does not need once proofs are erased; and all 17 such removals along `term`.
+
 ## Build
 
 ```bash
@@ -179,4 +209,5 @@ two datasets are identical, overlays `test/fixture-b` (version B), extracts agai
 `test/check.py` on both. Version B changes a definition, rewrites a statement, changes only a proof,
 renames a binder, and renames a theorem; the check pins how each hash moves in each case, the kinds,
 the edges of each notion, and the facets. `test/run.sh DIR` keeps the two datasets, which is how
-evidence-core's test vectors are produced.
+evidence-core's test vectors are produced. It also runs the kernel check on version B, along both
+notions, and checks that it catches a dropped edge.

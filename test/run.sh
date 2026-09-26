@@ -61,6 +61,22 @@ cp -r "$here/fixture-b/." "$work/b/"
 
 python3 "$here/check.py" "$work/out-a" "$work/out-b"
 
+# Check 2: the kernel checks every closure, along both notions, and catches a dropped edge.
+(cd "$work/b" && lake env "$bin" check --root Fixture --dataset "$work/out-b" --no-write --strict >/dev/null 2>&1) || {
+  echo "FAIL: the kernel check fails on version B" >&2
+  (cd "$work/b" && lake env "$bin" check --root Fixture --dataset "$work/out-b" --no-write) >&2; exit 1; }
+(cd "$work/b" && lake env "$bin" check --root Fixture --dataset "$work/out-b" --notion term --no-write --strict >/dev/null 2>&1) || {
+  echo "FAIL: the kernel check along term fails on version B" >&2; exit 1; }
+if (cd "$work/b" && lake env "$bin" check --root Fixture --dataset "$work/out-b" --strict \
+      --drop-edge Fixture.double_zero Fixture.double >/dev/null 2>&1); then
+  echo "FAIL: the kernel check did not catch a dropped edge" >&2; exit 1
+fi
+if (cd "$work/b" && lake env "$bin" check --root Fixture --dataset "$work/out-b" --notion term --strict \
+      --drop-edge Fixture.one "Fixture.one_pos'" >/dev/null 2>&1); then
+  echo "FAIL: the kernel check along term did not catch a dropped proof edge" >&2; exit 1
+fi
+echo "ok: the kernel checks every closure, and catches a dropped edge"
+
 (cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b-partial" --commit B --repo test/fixture --skip-module Fixture.Uses)
 python3 "$here/check_partial.py" "$work/out-b" "$work/out-b-partial"
 

@@ -42,6 +42,20 @@ Options for `extract`:
                        the same, one module per line, e.g. the failures Lake reports:
                          lake build --no-build 2>&1 | sed -n '/logged failures/,$s/^- //p'
 
+Check 2 of the suite's self-checks: Lean's kernel checks each project declaration against its
+closure as a dataset records it, and names what the closure lacks:
+
+  lake env trust-extract check --root <Prefix> --dataset <dir> [options]
+  --notion <meaning|term>  the closures to check (default: meaning, proofs erased)
+  --module <Module>        import this module and check its declarations (repeatable; default:
+                           the dataset's modules)
+  --decl <Name>            check this declaration only (repeatable)
+  --jobs <n>               run n checks at once (default: 1)
+  --heartbeats <n>         the kernel's limit per declaration, in thousands (default: none)
+  --drop-edge <A> <B>      leave out the edge from A to B, to test the check (writes nothing)
+  --no-write               do not write the facet check.kernel.<notion> into the dataset
+  --strict                 exit with 1 if a declaration fails
+
 Diagnostics:
   lake env trust-extract diagnose-import <private|server|exported> <Prefix | Module...>
 "
@@ -83,6 +97,28 @@ partial def parseOpts (args : List String) (cfg : Config) (extra : List (String 
   | "--part-out" :: v :: rest => parseOpts rest cfg (("part-out", v) :: extra)
   | a :: _ => .error s!"unknown argument `{a}`"
 
+partial def parseCheck (args : List String) (cfg : Check.Config) (strict : Bool) :
+    Except String (Check.Config × Bool) :=
+  match args with
+  | [] => .ok (cfg, strict)
+  | "--root" :: v :: rest => parseCheck rest { cfg with root := v.toName } strict
+  | "--dataset" :: v :: rest => parseCheck rest { cfg with dataset := v } strict
+  | "--notion" :: v :: rest => parseCheck rest { cfg with notion := v } strict
+  | "--module" :: v :: rest => parseCheck rest { cfg with modules := cfg.modules.push v.toName } strict
+  | "--decl" :: v :: rest => parseCheck rest { cfg with decls := cfg.decls.push v } strict
+  | "--drop-edge" :: a :: b :: rest => parseCheck rest { cfg with dropEdges := cfg.dropEdges.push (a, b) } strict
+  | "--no-write" :: rest => parseCheck rest { cfg with write := false } strict
+  | "--strict" :: rest => parseCheck rest cfg true
+  | "--jobs" :: v :: rest =>
+    match v.toNat? with
+    | some n => parseCheck rest { cfg with jobs := n } strict
+    | none => .error s!"--jobs expects a number, got `{v}`"
+  | "--heartbeats" :: v :: rest =>
+    match v.toNat? with
+    | some n => parseCheck rest { cfg with heartbeats := n } strict
+    | none => .error s!"--heartbeats expects a number, got `{v}`"
+  | a :: _ => .error s!"unknown argument `{a}`"
+
 unsafe def main (args : List String) : IO UInt32 := do
   -- Imported modules' `initialize` declarations must run, so that their environment extensions
   -- (in particular `TrustAnnotations`') are registered and receive their imported entries.
@@ -112,6 +148,17 @@ unsafe def main (args : List String) : IO UInt32 := do
       let some out := extra.lookup "part-out" | IO.eprintln "--part-out"; return 2
       let mods := ((← IO.FS.readFile modsFile).splitOn "\n").filter (!·.isEmpty) |>.map (·.toName)
       try extractPart cfg mods.toArray out catch e =>
+        IO.eprintln s!"error: {e}"; return 1
+  | "check" :: rest =>
+    match parseCheck rest { root := .anonymous } false with
+    | .error e => IO.eprintln s!"{e}\n\n{usage}"; return 2
+    | .ok (cfg, strict) =>
+      if cfg.root.isAnonymous then
+        IO.eprintln s!"--root is required\n\n{usage}"; return 2
+      try
+        let failed ← Check.run cfg
+        return if strict && failed > 0 then 1 else 0
+      catch e =>
         IO.eprintln s!"error: {e}"; return 1
   | "diagnose-import" :: level :: rest =>
     -- How many memory mappings importing costs, for `vm.max_map_count` problems. With a single
