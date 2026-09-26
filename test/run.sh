@@ -8,8 +8,8 @@
 # root, which imports it, must be listed as unavailable, and nothing else may change.
 #
 # Usage: test/run.sh [KEEP_DIR]   (after `lake build` of the extractor)
-#   With KEEP_DIR, the datasets are copied to KEEP_DIR/fixture-a, KEEP_DIR/fixture-b and
-#   KEEP_DIR/fixture-b-partial.
+#   With KEEP_DIR, the datasets are copied to KEEP_DIR/fixture-a, KEEP_DIR/fixture-b,
+#   KEEP_DIR/fixture-b-partial and KEEP_DIR/fixture-b-closure.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -64,11 +64,28 @@ python3 "$here/check.py" "$work/out-a" "$work/out-b"
 (cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b-partial" --commit B --repo test/fixture --skip-module Fixture.Uses)
 python3 "$here/check_partial.py" "$work/out-b" "$work/out-b-partial"
 
+# Past the project: the closure along `term`, in one part and in three.
+(cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b-closure" --commit B --repo test/fixture --upstream-closure term)
+(cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b-closure3" --commit B --repo test/fixture --upstream-closure term --parts 3 --jobs 2)
+python3 "$here/check_closure.py" "$work/out-b" "$work/out-b-closure"
+python3 - "$work/out-b-closure/meta.json" "$work/out-b-closure3/meta.json" <<'EOF2'
+import json, sys
+for p in sys.argv[1:]:
+    m = json.load(open(p)); m["producer"].pop("parts"); json.dump(m, open(p, "w"), indent=1)
+EOF2
+if ! diff -r "$work/out-b-closure" "$work/out-b-closure3" >/dev/null; then
+  echo "FAIL: the closure extracted in 3 parts differs" >&2
+  diff -r "$work/out-b-closure" "$work/out-b-closure3" | head -20 >&2
+  exit 1
+fi
+echo "ok: the closure does not depend on the parts"
+
 if [ $# -ge 1 ]; then
   mkdir -p "$1"
-  rm -rf "$1/fixture-a" "$1/fixture-b" "$1/fixture-b-partial"
+  rm -rf "$1/fixture-a" "$1/fixture-b" "$1/fixture-b-partial" "$1/fixture-b-closure"
   cp -r "$work/out-a" "$1/fixture-a"
   cp -r "$work/out-b" "$1/fixture-b"
   cp -r "$work/out-b-partial" "$1/fixture-b-partial"
+  cp -r "$work/out-b-closure" "$1/fixture-b-closure"
   echo "kept the datasets in $1"
 fi
