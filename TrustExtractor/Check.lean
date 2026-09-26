@@ -200,8 +200,12 @@ structure Block where
   /-- What is added to the environment when the block is in a closure: renamed, and under
   `meaning` erased, with theorems as axioms. -/
   consts : Array ConstantInfo := #[]
-  /-- What the kernel checks when the block is the declaration checked. None: nothing to check. -/
+  /-- What the kernel checks when the block is the declaration checked. None: nothing to check, or
+  made only when checked (`lazy`). -/
   decl? : Option Declaration := none
+  /-- Whether what the kernel checks is made when the block is checked (`lazyDecl`): a proof, along
+  `term`, which would otherwise be copied, renamed, for every theorem of the environment. -/
+  lazy : Bool := false
   /-- Why the block is not checked, or was not erased. -/
   note : Option String := none
   /-- The project constants its constants mention, by block. -/
@@ -228,12 +232,18 @@ def _root_.Lean.ConstantInfo.updateName? (info : ConstantInfo) (n : Name) : Opti
   | _ => none
 
 /-- Builds the block named `b`. `ren` renames every project constant; `erase?` is true for
-`meaning`. -/
-def mkBlock (ren : Std.HashMap Name Name) (erase? : Bool) (b : Name) : MetaM Block := do
+`meaning`; `want` says whether the block is to be checked, and so needs a declaration for the kernel.
+Its mentions are read from the expressions before renaming (erased under `meaning`), which copies
+nothing: along `term`, they include every proof. -/
+def mkBlock (ren : Std.HashMap Name Name) (erase? : Bool) (want : Bool) (b : Name) : MetaM Block := do
   let r (n : Name) : Name := ren.getD n n
   let R := rename ren
   let er (e : Expr) : MetaM Expr := do
     if erase? then return (← (erase e).run' {}) else return e
+  let mentionsOf (es : Array Expr) : MetaM (Array Name) := do
+    let acc ← IO.mkRef ({} : NameSet)
+    for e in es do mentioned e acc
+    return (← acc.get).toArray
   match ← getConstInfo b with
   | .inductInfo v =>
     -- As `Lean.Replay` rebuilds a block: its types and their constructors, which the kernel checks
@@ -266,52 +276,62 @@ def mkBlock (ren : Std.HashMap Name Name) (erase? : Bool) (b : Name) : MetaM Blo
         ctors := (ctors.filter (·.induct == i.name)).map fun c =>
           { name := r c.name, type := R (ctorType.getD c.name c.type) } }
     let names := (inds.map (·.name) ++ ctors.map (·.name) ++ recs.map (·.name)).toArray
-    return { names, consts, decl? := some (.inductDecl v.levelParams v.numParams types v.isUnsafe) }
+    return { names, consts, mentions := ← mentionsOf (indTypes ++ ctorTypes).toArray
+             decl? := if want then some (.inductDecl v.levelParams v.numParams types v.isUnsafe) else none }
   | .defnInfo v =>
     if v.safety == .unsafe then
       let d : DefinitionVal := { v with name := r b, type := R v.type, value := R v.value, all := [r b] }
-      return { names := #[b], consts := #[.defnInfo d], note := some "unsafe" }
+      return { names := #[b], consts := #[.defnInfo d], note := some "unsafe",
+               mentions := ← mentionsOf #[v.type, v.value] }
     let type ← er v.type
     if ← isProp v.type then
       let ax : AxiomVal := { name := r b, levelParams := v.levelParams, type := R type, isUnsafe := false }
-      let decl := if erase? then .axiomDecl ax else
-        .defnDecl { v with name := r b, type := R type, value := R v.value, all := [r b] }
-      return { names := #[b], consts := #[.axiomInfo ax], decl? := some decl }
-    let d : DefinitionVal := { v with name := r b, type := R type, value := R (← er v.value), all := [r b] }
-    return { names := #[b], consts := #[.defnInfo d], decl? := some (.defnDecl d) }
+      return { names := #[b], consts := #[.axiomInfo ax], lazy := !erase?,
+               decl? := if want && erase? then some (.axiomDecl ax) else none
+               mentions := ← mentionsOf (if erase? then #[type] else #[v.type, v.value]) }
+    let value ← er v.value
+    let d : DefinitionVal := { v with name := r b, type := R type, value := R value, all := [r b] }
+    return { names := #[b], consts := #[.defnInfo d], decl? := if want then some (.defnDecl d) else none
+             mentions := ← mentionsOf #[type, value] }
   | .thmInfo v =>
     let type ← er v.type
     let ax : AxiomVal := { name := r b, levelParams := v.levelParams, type := R type, isUnsafe := false }
-    let decl := if erase? then .axiomDecl ax else
-      .thmDecl { v with name := r b, type := R type, value := R v.value, all := [r b] }
-    return { names := #[b], consts := #[.axiomInfo ax], decl? := some decl }
+    return { names := #[b], consts := #[.axiomInfo ax], lazy := !erase?,
+             decl? := if want && erase? then some (.axiomDecl ax) else none
+             mentions := ← mentionsOf (if erase? then #[type] else #[v.type, v.value]) }
   | .opaqueInfo v =>
     let type ← er v.type
     if ← isProp v.type then
       let ax : AxiomVal := { name := r b, levelParams := v.levelParams, type := R type, isUnsafe := v.isUnsafe }
-      return { names := #[b], consts := #[.axiomInfo ax], decl? := some (.axiomDecl ax) }
-    let o : OpaqueVal := { v with name := r b, type := R type, value := R (← er v.value), all := [r b] }
+      return { names := #[b], consts := #[.axiomInfo ax], decl? := if want then some (.axiomDecl ax) else none
+               mentions := ← mentionsOf #[type] }
+    let value ← er v.value
+    let o : OpaqueVal := { v with name := r b, type := R type, value := R value, all := [r b] }
     return { names := #[b], consts := #[.opaqueInfo o],
-             decl? := if v.isUnsafe then none else some (.opaqueDecl o),
-             note := if v.isUnsafe then some "unsafe" else none }
+             decl? := if v.isUnsafe || !want then none else some (.opaqueDecl o),
+             note := if v.isUnsafe then some "unsafe" else none
+             mentions := ← mentionsOf #[type, value] }
   | .axiomInfo v =>
-    let ax : AxiomVal := { v with name := r b, type := R (← er v.type) }
-    return { names := #[b], consts := #[.axiomInfo ax], decl? := some (.axiomDecl ax) }
+    let type ← er v.type
+    let ax : AxiomVal := { v with name := r b, type := R type }
+    return { names := #[b], consts := #[.axiomInfo ax], decl? := if want then some (.axiomDecl ax) else none
+             mentions := ← mentionsOf #[type] }
   | info =>
     -- A quotient's constants, or a constructor or recursor reached on its own: added as they are.
-    return { names := #[b], consts := #[info.updateName? (r b) |>.getD info], note := some "not checked" }
+    return { names := #[b], consts := #[info.updateName? (r b) |>.getD info], note := some "not checked"
+             mentions := ← mentionsOf #[info.type] }
 where
   mkRecName (n : Name) : Name := n.str "rec"
 
-/-- The expressions of a block that its mentions are read from: what is added, and what is
-checked. -/
-def Block.exprs (b : Block) : Array Expr :=
-  b.consts.flatMap (fun c => #[c.type] ++ c.value?.toArray) ++
-  match b.decl? with
-  | some (.defnDecl d) => #[d.value]
-  | some (.thmDecl t) => #[t.value]
-  | some (.opaqueDecl o) => #[o.value]
-  | _ => #[]
+/-- What the kernel checks for a `lazy` block, along `term`: the theorem, or the `Prop`-valued
+definition, with its proof, renamed. Made when the block is checked, and dropped after. -/
+def lazyDecl (env : Environment) (ren : Std.HashMap Name Name) (b : Name) : Option Declaration :=
+  let r (n : Name) : Name := ren.getD n n
+  let R := rename ren
+  match env.find? b with
+  | some (.thmInfo v) => some (.thmDecl { v with name := r b, type := R v.type, value := R v.value, all := [r b] })
+  | some (.defnInfo v) => some (.defnDecl { v with name := r b, type := R v.type, value := R v.value, all := [r b] })
+  | _ => none
 
 /-! ## The kernel's verdict -/
 
@@ -329,9 +349,9 @@ def Verdict.ok (v : Verdict) : Bool := v.missing.isEmpty && v.error?.isNone && v
 /-- Checks block `b` in `base` with the blocks `closure` added. -/
 def checkBlock (base : Kernel.Environment) (blocks : Std.HashMap Name Block)
     (unren : Std.HashMap Name Name) (blockOfName : Std.HashMap Name Name) (heartbeats : Nat)
-    (b : Name) (closure : Array Name) : Verdict := Id.run do
+    (lazy : Name → Option Declaration) (b : Name) (closure : Array Name) : Verdict := Id.run do
   let some blk := blocks.get? b | return { skipped? := some "not in the environment" }
-  let some decl := blk.decl? | return { skipped? := blk.note.getD "not checked" }
+  let some decl := if blk.lazy then lazy b else blk.decl? | return { skipped? := blk.note.getD "not checked" }
   let add (env : Kernel.Environment) (c : Name) : Kernel.Environment :=
     if c == b then env else ((blocks.get? c).map (·.consts)).getD #[] |>.foldl kernelAdd env
   let mut env := closure.foldl add base
@@ -415,23 +435,39 @@ def check (cfg : Config) : IO (Array Row) := do
   let blockOfName : Std.HashMap Name Name :=
     projectConsts.foldl (init := {}) fun m n => m.insert n (blockOf env n)
 
-  -- Blocks, built once. A block is a node if one of its constants is a node of the dataset.
+  -- The declarations to check: the dataset's project nodes of the imported project modules.
+  let wanted : Std.HashSet String := cfg.decls.foldl (·.insert ·) {}
+  let modSet : Std.HashSet String := mods.foldl (fun s m => s.insert m.toString) {}
+  let mut todo : Array (Nat × Name) := #[]
+  let mut absent := 0
+  for h : i in [0:g.names.size] do
+    if !g.project[i]! then continue
+    if !wanted.isEmpty && !wanted.contains g.names[i] then continue
+    if cfg.decls.isEmpty && !cfg.modules.isEmpty && !modSet.contains g.modules[i]! then continue
+    match byString.get? g.names[i] with
+    | some n => todo := todo.push (i, n)
+    | none => absent := absent + 1
+  if absent > 0 then
+    IO.eprintln s!"warning: {absent} project nodes of the dataset are not in the environment: \
+      is the project built at the dataset's commit?"
+  let todoBlocks : Std.HashSet Name := todo.foldl (fun s (_, n) => s.insert (blockOfName.getD n n)) {}
+
+  -- Blocks, built once. A block is a node if one of its constants is a node of the dataset. Only the
+  -- blocks to check get a declaration for the kernel.
   let erase? := cfg.notion == "meaning"
   let blockNames := (projectConsts.map (blockOfName.getD · .anonymous)).toList.eraseDups.toArray
   let (blocks, failures) ← runMetaM env do
     let mut blocks : Std.HashMap Name Block := {}
     let mut failures := 0
     for b in blockNames do
+      let want := todoBlocks.contains b
       let mut blk : Block := default
-      try blk ← mkBlock ren erase? b
+      try blk ← mkBlock ren erase? want b
       catch e =>
         failures := failures + 1
-        blk := { (← mkBlock ren false b) with note := some s!"not erased: {← e.toMessageData.toString}" }
-      let acc ← IO.mkRef ({} : NameSet)
-      for e in blk.exprs do mentioned e acc
-      -- The expressions are renamed: read the project's constants back.
-      let ms := (← acc.get).toArray.filterMap fun n =>
-        (unren.get? n).bind fun o => (blockOfName.get? o).filter (· != b)
+        blk := { (← mkBlock ren false want b) with note := some s!"not erased: {← e.toMessageData.toString}" }
+      -- The project constants it mentions, by block.
+      let ms := blk.mentions.filterMap fun o => (blockOfName.get? o).filter (· != b)
       blocks := blocks.insert b { blk with mentions := ms.toList.eraseDups.toArray }
     return (blocks, failures)
   progress t0 s!"{projectConsts.size} project constants in {blocks.size} blocks{if failures > 0 then s!", {failures} not erased" else ""}"
@@ -460,22 +496,6 @@ def check (cfg : Config) : IO (Array Row) := do
       reach.modify (·.insert b r)
       return r
 
-  -- The declarations to check: the dataset's project nodes of the imported project modules.
-  let wanted : Std.HashSet String := cfg.decls.foldl (·.insert ·) {}
-  let modSet : Std.HashSet String := mods.foldl (fun s m => s.insert m.toString) {}
-  let mut todo : Array (Nat × Name) := #[]
-  let mut absent := 0
-  for h : i in [0:g.names.size] do
-    if !g.project[i]! then continue
-    if !wanted.isEmpty && !wanted.contains g.names[i] then continue
-    if cfg.decls.isEmpty && !cfg.modules.isEmpty && !modSet.contains g.modules[i]! then continue
-    match byString.get? g.names[i] with
-    | some n => todo := todo.push (i, n)
-    | none => absent := absent + 1
-  if absent > 0 then
-    IO.eprintln s!"warning: {absent} project nodes of the dataset are not in the environment: \
-      is the project built at the dataset's commit?"
-
   -- Each declaration's closure, as blocks; and what it mentions that the closure lacks.
   let mut jobs : Array (Nat × Name × Array Name) := #[]
   let mut unlisted : Std.HashMap Nat (Array Name) := {}
@@ -495,7 +515,7 @@ def check (cfg : Config) : IO (Array Row) := do
 
   let run (js : Array (Nat × Name × Array Name)) : Array (Nat × Verdict) :=
     js.map fun (i, b, closure) =>
-      (i, checkBlock base blocks unren blockOfName (cfg.heartbeats * 1000) b closure)
+      (i, checkBlock base blocks unren blockOfName (cfg.heartbeats * 1000) (lazyDecl env ren) b closure)
   let n := max 1 cfg.jobs
   let chunk := (jobs.size + n - 1) / n
   let tasks := (List.range n).toArray.map fun k =>
