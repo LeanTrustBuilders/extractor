@@ -188,7 +188,10 @@ and the closure lacks is **missing**; the check adds it and runs again, to name 
 - It proves sufficiency, not minimality, and does not see notation or coercions.
 
 It must run on the dataset's toolchain, in the project as built at the dataset's commit.
-`--drop-edge A B` leaves an edge out, to test the check; `--strict` exits with 1 on any failure. On
+`--drop-edge A B` leaves an edge out, to test the check; `--strict` exits with 1 on any failure.
+`--shard k/n` checks every n-th declaration, to spread a check over processes: along `term`, on a
+library the size of Tau Ceti, checking proofs in many threads of one process used far more memory
+than the same work in several processes of one thread each. On
 LeanMachineLearning (1,452 declarations) both notions check everything in about 3 seconds with
 `--jobs 8`. Dropping edges one at a time, the kernel caught all 39 removals that left a declaration's
 `meaning` closure without the target, except 2 proofs written inside a statement, which `meaning`

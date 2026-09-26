@@ -50,7 +50,10 @@ closure as a dataset records it, and names what the closure lacks:
   --module <Module>        import this module and check its declarations (repeatable; default:
                            the dataset's modules)
   --decl <Name>            check this declaration only (repeatable)
-  --jobs <n>               run n checks at once (default: 1)
+  --jobs <n>               run n checks at once, as threads (default: 1)
+  --shard <k/n>            check every n-th declaration, from the k-th (0-based): to run a check
+                           as n processes. Along `term` on a large library, prefer processes:
+                           checking proofs in many threads of one process can use far more memory
   --heartbeats <n>         the kernel's limit per declaration, in thousands (default: none)
   --drop-edge <A> <B>      leave out the edge from A to B, to test the check (writes nothing)
   --no-write               do not write the facet check.kernel.<notion> into the dataset
@@ -113,6 +116,13 @@ partial def parseCheck (args : List String) (cfg : Check.Config) (strict : Bool)
     match v.toNat? with
     | some n => parseCheck rest { cfg with jobs := n } strict
     | none => .error s!"--jobs expects a number, got `{v}`"
+  | "--shard" :: v :: rest =>
+    match v.splitOn "/" with
+    | [a, b] => match a.toNat?, b.toNat? with
+      | some k, some n => if k < n then parseCheck rest { cfg with shard := (k, n) } strict
+          else .error s!"--shard expects k/n with k < n, got `{v}`"
+      | _, _ => .error s!"--shard expects k/n, got `{v}`"
+    | _ => .error s!"--shard expects k/n, got `{v}`"
   | "--heartbeats" :: v :: rest =>
     match v.toNat? with
     | some n => parseCheck rest { cfg with heartbeats := n } strict
