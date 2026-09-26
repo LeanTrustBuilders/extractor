@@ -135,8 +135,8 @@ def mkSorry (type : Expr) : Expr :=
   mkApp2 (mkConst ``sorryAx [Level.zero]) type (mkConst ``Bool.false)
 
 /-- `e`, which is not itself a proof, with its proofs erased: every argument whose expected type is
-a proposition, and every let-bound value whose type is, becomes `sorryAx` of that type (itself
-erased). The expected type of an argument comes from the type of the function applied, so the
+a proposition (unless it is a local variable), and every let-bound value whose type is, becomes
+`sorryAx` of that type (itself erased). The expected type of an argument comes from the type of the function applied, so the
 erased term mentions nothing its proofs alone mentioned. -/
 partial def erase (e : Expr) : EraseM Expr := do
   match e with
@@ -151,7 +151,9 @@ partial def erase (e : Expr) : EraseM Expr := do
       for a in e.getAppArgs do
         unless ty.isForall do ty ← whnf ty
         let .forallE _ d b _ := ty | throwError "erase: expected a function type, got{indentExpr ty}"
-        let a' ← if ← isProp d then do pure (mkSorry (← erase d)) else erase a
+        -- A proof that is a local variable is kept: it mentions nothing, and an inductive type's
+        -- constructors must apply it to its parameters, `Prop` ones included, as they are.
+        let a' ← if !a.isFVar && (← isProp d) then do pure (mkSorry (← erase d)) else erase a
         out := .app out a'
         ty := b.instantiate1 a
       pure out
@@ -235,7 +237,10 @@ def mkBlock (ren : Std.HashMap Name Name) (erase? : Bool) (b : Name) : MetaM Blo
   match ← getConstInfo b with
   | .inductInfo v =>
     -- As `Lean.Replay` rebuilds a block: its types and their constructors, which the kernel checks
-    -- together and from which it generates the recursors. Types are never erased.
+    -- together and from which it generates the recursors. Under `meaning` their proofs are erased
+    -- like any other's, recursors included: a constructor's type can hold a proof (an instance of a
+    -- `Prop` class), and comparing it with an erased argument would make the kernel look up what
+    -- that proof mentions. Where an erased and an unerased proof meet, proof irrelevance bridges them.
     let inds ← v.all.mapM getConstInfoInduct
     let ctors ← inds.flatMap (·.ctors) |>.mapM getConstInfoCtor
     let env ← getEnv
@@ -244,17 +249,22 @@ def mkBlock (ren : Std.HashMap Name Name) (erase? : Bool) (b : Name) : MetaM Blo
     let recs := recNames.filterMap fun n => match env.find? n with
       | some (.recInfo rv) => some rv
       | _ => none
+    let indTypes ← inds.mapM (er ·.type)
+    let ctorTypes ← ctors.mapM (er ·.type)
+    let recTypes ← recs.mapM (er ·.type)
+    let recRules ← recs.mapM fun rv => rv.rules.mapM fun rl => return { rl with ctor := r rl.ctor, rhs := R (← er rl.rhs) }
     let consts : Array ConstantInfo :=
-      (inds.map fun i => ConstantInfo.inductInfo { i with
-        name := r i.name, type := R i.type, all := i.all.map r, ctors := i.ctors.map r }).toArray ++
-      (ctors.map fun c => ConstantInfo.ctorInfo { c with
-        name := r c.name, type := R c.type, induct := r c.induct }).toArray ++
-      (recs.map fun rv => ConstantInfo.recInfo { rv with
-        name := r rv.name, type := R rv.type, all := rv.all.map r
-        rules := rv.rules.map fun rl => { rl with ctor := r rl.ctor, rhs := R rl.rhs } }).toArray
-    let types : List InductiveType := inds.map fun i =>
-      { name := r i.name, type := R i.type
-        ctors := (ctors.filter (·.induct == i.name)).map fun c => { name := r c.name, type := R c.type } }
+      ((inds.zip indTypes).map fun (i, t) => ConstantInfo.inductInfo { i with
+        name := r i.name, type := R t, all := i.all.map r, ctors := i.ctors.map r }).toArray ++
+      ((ctors.zip ctorTypes).map fun (c, t) => ConstantInfo.ctorInfo { c with
+        name := r c.name, type := R t, induct := r c.induct }).toArray ++
+      (((recs.zip recTypes).zip recRules).map fun ((rv, t), rules) => ConstantInfo.recInfo { rv with
+        name := r rv.name, type := R t, all := rv.all.map r, rules }).toArray
+    let ctorType : Std.HashMap Name Expr := (ctors.zip ctorTypes).foldl (fun m (c, t) => m.insert c.name t) {}
+    let types : List InductiveType := (inds.zip indTypes).map fun (i, t) =>
+      { name := r i.name, type := R t
+        ctors := (ctors.filter (·.induct == i.name)).map fun c =>
+          { name := r c.name, type := R (ctorType.getD c.name c.type) } }
     let names := (inds.map (·.name) ++ ctors.map (·.name) ++ recs.map (·.name)).toArray
     return { names, consts, decl? := some (.inductDecl v.levelParams v.numParams types v.isUnsafe) }
   | .defnInfo v =>
