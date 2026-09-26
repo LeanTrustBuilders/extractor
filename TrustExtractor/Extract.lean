@@ -51,7 +51,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/0"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.5.0"
+def extractorVersion : String := "0.6.0"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
