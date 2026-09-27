@@ -43,6 +43,7 @@ for it):
     directory: path/to/the/checkout      # default: .
     args: --parts 4                      # anything else for `trust-extract extract`
     check: meaning                       # optional: the kernel check, `meaning term` for a small library
+    welldefined: true                    # optional: the well-definedness facet (welldefined-args: --module …)
     publish: dataset-${{ steps.commit.outputs.sha12 }}   # optional
 ```
 

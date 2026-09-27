@@ -34,6 +34,16 @@ inputs:
   check-args:
     description: More arguments to `trust-extract check` (--jobs, --heartbeats).
     default: '--jobs 4'
+  welldefined:
+    description: >-
+      Add the `welldefined` facet: each use of a definition with a declared domain, in the claims and
+      specification theorems, checked against what is in scope (`trust-extract welldefined`).
+    default: 'false'
+  welldefined-args:
+    description: >-
+      More arguments to `trust-extract welldefined` (--module to import a catalogue, --decls-file,
+      --theorems-in, --discharger, --jobs).
+    default: '--jobs 4'
   publish:
     description: Publish the dataset as this release tag of the current repository (dataset-<commit12>).
     default: ''
@@ -69,6 +79,8 @@ runs:
         ATTRIBUTES: ${{ inputs.attributes }}
         CHECK: ${{ inputs.check }}
         CHECK_ARGS: ${{ inputs.check-args }}
+        WELLDEFINED: ${{ inputs.welldefined }}
+        WELLDEFINED_ARGS: ${{ inputs.welldefined-args }}
       run: |
         dir="$RUNNER_TEMP/trust-extract-release"
         tag=$("$GITHUB_ACTION_PATH/../ci/release.sh" install "$DIRECTORY/lean-toolchain" "$dir")
@@ -102,6 +114,10 @@ runs:
             print(f"the kernel check along {sys.argv[2]}: all {len(rows)} declarations pass")
         PY
         done
+        # Well-definedness: the uses of definitions with a declared domain, and what is in scope.
+        if [ "$WELLDEFINED" = "true" ]; then
+          (cd "$DIRECTORY" && lake env "$bin" welldefined --dataset "$out" $WELLDEFINED_ARGS)
+        fi
         du -sh "$out"
         { echo "dataset=$out"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
     - if: inputs.publish != ''
