@@ -42,6 +42,7 @@ for it):
     repo: owner/name
     directory: path/to/the/checkout      # default: .
     args: --parts 4                      # anything else for `trust-extract extract`
+    check: meaning                       # optional: the kernel check, `meaning term` for a small library
     publish: dataset-${{ steps.commit.outputs.sha12 }}   # optional
 ```
 
