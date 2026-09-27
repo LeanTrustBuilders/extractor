@@ -267,6 +267,40 @@ before checking and ran out at 35 GB; that is fixed. `meaning` has no such issue
 closures of Tau Ceti check in about 5 minutes, at most 9 GB. On LeanMachineLearning, `term` takes
 3 seconds and 3.5 GB.
 
+## Well-definedness: the `welldefined` facet
+
+```bash
+lake env trust-extract welldefined --dataset dataset --jobs 8
+```
+
+Runs the analyzer of [WellDefined](https://github.com/LeanTrustBuilders/well-defined)
+(well-definedness.md in LeanTrustBuilders/design). Each application of a definition with a declared
+domain (`@[domain]`) in the statements analyzed carries an obligation: its arguments are in the
+domain, given what is in scope where it sits. Each comes out `discharged`, `irrelevant` (the
+statement says the same whatever the value), `refuted` (the statement is about the value outside
+the domain), `open` or `unapplied`.
+
+- **Which statements:** the claims and the specification theorems (`@[claim]`, `@[specifies]`,
+  characterizations stated by one theorem); those named with `--decl` or `--decls-file`; every
+  theorem of the modules under `--theorems-in`. Not every lemma by default: in library lemmas a use
+  outside the domain is often deliberate.
+- **Whose domains:** those of the modules imported. `--module` imports a catalogue alongside the
+  library, so that its domains apply; the rows are then keyed by the library's declarations, which
+  need not be nodes of the dataset.
+- **Dischargers:** `omega`, `infer_instance`, `positivity`, `fun_prop`, `norm_num`, `simp_all`,
+  parsed in the analyzed environment (those that do not parse are left out), then those added with
+  `--discharger`, typically a catalogue's own tactic. Each gets `--heartbeats` (default 10000, in
+  the unit of `maxHeartbeats`) per obligation.
+- It writes the facet `welldefined` (schema `welldefined/1`): a row per declaration analyzed,
+  `{decl, obligations}` or `{decl, error}`. `meta.json` records the dischargers, their budget and
+  the domains declared, since the results depend on them.
+
+On Mathlib v4.35.0-rc2 with the Mathlib catalogue (`--module Mathlib --module MathlibCatalogue
+--theorems-in Mathlib.Probability --theorems-in Mathlib.InformationTheory --discharger
+mathlib_catalogue_discharger --jobs 16`): 4,181 theorems, 477 of them using the integral, conditional
+expectation or the Radon–Nikodym derivative, 1,092 obligations, in 84 seconds after a 9-second
+import, at 7 GB.
+
 ## Build
 
 ```bash

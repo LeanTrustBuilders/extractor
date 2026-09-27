@@ -60,6 +60,26 @@ closure as a dataset records it, and names what the closure lacks:
   --no-write               do not write the facet check.kernel.<notion> into the dataset
   --strict                 exit with 1 if a declaration fails
 
+Well-definedness (well-definedness.md): each use of a definition with a declared domain
+(`@[domain]`), in the statements analyzed, checked against what is in scope where it sits. Writes
+the facet `welldefined` into the dataset:
+
+  lake env trust-extract welldefined --dataset <dir> [options]
+  --module <Module>        import this module (repeatable; default: the dataset's modules). Import
+                           a catalogue here to use its domains
+  --decl <Name>            analyze this declaration too (repeatable)
+  --decls-file <file>      the same, one name per line
+  --theorems-in <Prefix>   analyze every theorem of the modules under this prefix (repeatable)
+  --no-annotated           do not analyze the claims and specification theorems (by default, every
+                           `@[claim]`, `@[specifies]` and characterization theorem)
+  --discharger <tactic>    a tactic to try on each obligation after the default ones (omega,
+                           infer_instance, positivity, fun_prop, norm_num, simp_all), typically a
+                           catalogue's own (repeatable)
+  --no-default-dischargers only the dischargers given
+  --heartbeats <n>         each discharger's budget, in the unit of maxHeartbeats (default: 10000)
+  --jobs <n>               analyze n declarations at once, as threads (default: 1)
+  --no-write               do not write the facet
+
 Diagnostics:
   lake env trust-extract diagnose-import <private|server|exported> <Prefix | Module...>
 "
@@ -130,6 +150,35 @@ partial def parseCheck (args : List String) (cfg : Check.Config) (strict : Bool)
     | none => .error s!"--heartbeats expects a number, got `{v}`"
   | a :: _ => .error s!"unknown argument `{a}`"
 
+partial def parseWellDefined (args : List String) (cfg : WellDefinedFacet.Config) :
+    IO (Except String WellDefinedFacet.Config) :=
+  match args with
+  | [] => return .ok cfg
+  | "--dataset" :: v :: rest => parseWellDefined rest { cfg with dataset := v }
+  | "--module" :: v :: rest => parseWellDefined rest { cfg with modules := cfg.modules.push v.toName }
+  | "--decl" :: v :: rest => parseWellDefined rest { cfg with decls := cfg.decls.push v.toName }
+  | "--decls-file" :: v :: rest => do
+    let names := ((← IO.FS.readFile v).splitOn "\n").map (·.trimAscii.toString)
+      |>.filter (fun s => !s.isEmpty && !s.startsWith "#") |>.map (·.toName)
+    parseWellDefined rest { cfg with decls := cfg.decls ++ names.toArray }
+  | "--theorems-in" :: v :: rest =>
+    parseWellDefined rest { cfg with theoremsIn := cfg.theoremsIn.push v.toName }
+  | "--no-annotated" :: rest => parseWellDefined rest { cfg with annotated := false }
+  | "--no-default-dischargers" :: rest =>
+    parseWellDefined rest { cfg with defaultDischargers := false }
+  | "--discharger" :: v :: rest =>
+    parseWellDefined rest { cfg with dischargers := cfg.dischargers.push v }
+  | "--heartbeats" :: v :: rest =>
+    match v.toNat? with
+    | some n => parseWellDefined rest { cfg with heartbeats := n }
+    | none => return .error s!"--heartbeats expects a number, got `{v}`"
+  | "--jobs" :: v :: rest =>
+    match v.toNat? with
+    | some n => parseWellDefined rest { cfg with jobs := n }
+    | none => return .error s!"--jobs expects a number, got `{v}`"
+  | "--no-write" :: rest => parseWellDefined rest { cfg with write := false }
+  | a :: _ => return .error s!"unknown argument `{a}`"
+
 unsafe def main (args : List String) : IO UInt32 := do
   -- Imported modules' `initialize` declarations must run, so that their environment extensions
   -- (in particular `TrustAnnotations`') are registered and receive their imported entries.
@@ -169,6 +218,15 @@ unsafe def main (args : List String) : IO UInt32 := do
       try
         let failed ← Check.run cfg
         return if strict && failed > 0 then 1 else 0
+      catch e =>
+        IO.eprintln s!"error: {e}"; return 1
+  | "welldefined" :: rest =>
+    match ← parseWellDefined rest {} with
+    | .error e => IO.eprintln s!"{e}\n\n{usage}"; return 2
+    | .ok cfg =>
+      try
+        WellDefinedFacet.run cfg
+        return 0
       catch e =>
         IO.eprintln s!"error: {e}"; return 1
   | "diagnose-import" :: level :: rest =>

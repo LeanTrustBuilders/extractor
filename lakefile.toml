@@ -20,6 +20,12 @@ git = "https://github.com/LeanTrustBuilders/annotations"
 # Like MeaningGraph: `main` follows the newest toolchain, `lean-v<toolchain>` older ones.
 rev = "main"
 
+# The well-definedness analyzer, for `trust-extract welldefined`.
+[[require]]
+name = "WellDefined"
+git = "https://github.com/LeanTrustBuilders/well-defined"
+rev = "main"
+
 
 [[lean_lib]]
 name = "TrustExtractor"
