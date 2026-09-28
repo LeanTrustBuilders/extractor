@@ -17,7 +17,7 @@ outputs:
     description: The trust-extract binary.
     value: ${{ steps.install.outputs.bin }}
   scripts:
-    description: The directory of the scripts it ships (examples.py).
+    description: The directory of the scripts it ships (attributes.py).
     value: ${{ steps.install.outputs.scripts }}
   tag:
     description: The release installed.

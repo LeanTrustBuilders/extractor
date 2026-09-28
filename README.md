@@ -38,8 +38,8 @@ whose tag ends with your project's toolchain. `trust-extract --help` lists every
     publish: dataset-${{ steps.commit.outputs.sha12 }}   # optional: publish as a release
 ```
 
-It installs the newest release for the library's toolchain, extracts, adds the `examples` and
-`attributes` facets, runs the optional steps, and publishes the dataset as a release of the
+It installs the newest release for the library's toolchain, extracts, adds the `attributes` facet,
+runs the optional steps, and publishes the dataset as a release of the
 repository running the workflow, where evidence-store and referee-site look for it.
 `LeanTrustBuilders/extractor/setup@main` only installs the release (outputs `bin`, `scripts`, `tag`,
 and `toolchains`: those that have one).
@@ -106,23 +106,18 @@ and one `annotation.<attr>` per attribute recorded in the TrustAnnotations exten
 attributes defined after this release. `--no-statements`, `--no-refs`, `--no-signatures` and
 `--no-upstream-docs` leave out what a consumer does not show.
 
-## Facets from the sources
+## The attributes facet
 
-The compiled library keeps neither `example`s nor the attributes a declaration was written with.
-Two scripts, shipped with each release, read them from the sources at the dataset's commit (the
-`extract` action runs both):
+The compiled library does not keep the attributes a declaration was written with. A script shipped
+with each release reads them from the sources at the dataset's commit (the `extract` action runs it):
 
 ```bash
-python3 scripts/examples.py   --dataset dataset --source path/to/the/checkout
 python3 scripts/attributes.py --dataset dataset --source path/to/the/checkout
 ```
 
-- `examples` (`examples/1`): for each declaration some `example` names, those examples, with their
-  statements and whether they use `sorry`. Names are resolved as Lean would, through the namespaces
-  around the example and those opened.
-- `attributes` (`attributes/1`): the attributes written before each declaration's keyword, as
-  `{name, args}` (`@[stacks 09GA]`, `@[wikidata Q616608]`, `@[deprecated]`, …). Those added later by
-  an `attribute [...]` command are not seen.
+It writes the facet `attributes` (`attributes/1`): the attributes written before each declaration's
+keyword, as `{name, args}` (`@[stacks 09GA]`, `@[wikidata Q616608]`, `@[deprecated]`, …). Those
+added later by an `attribute [...]` command are not seen.
 
 ## Checking a dataset
 
@@ -193,5 +188,5 @@ identical, overlays version B (`test/fixture-b`: a definition changed, a stateme
 changed, a binder and a theorem renamed), extracts again, and checks how each hash moves, the edges
 of each notion and the facets. It also checks extraction in parts, skipped modules, the upstream
 closure, the kernel check (which must catch a dropped edge), the well-definedness facet, and the
-facets read from the sources. With `KEEP_DIR`, it keeps the datasets: they are the test vectors of
+the attributes facet. With `KEEP_DIR`, it keeps the datasets: they are the test vectors of
 specs, evidence-core and referee-site.

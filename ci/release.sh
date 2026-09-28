@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The extractor's releases, as the actions and other workflows use them. A release is tagged
 # v<extractor version>-lean-v<toolchain> (the first ones were tagged v<toolchain>), and carries
-# trust-extract-linux-x86_64.tar.gz: trust-extract, and scripts/examples.py.
+# trust-extract-linux-x86_64.tar.gz: trust-extract, and scripts/attributes.py.
 #
 #   release.sh toolchains              the Lean versions some release supports, one per line
 #   release.sh tag VERSION             the newest release for Lean VERSION (4.34.0, 4.35.0-rc2)

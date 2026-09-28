@@ -100,21 +100,6 @@ assert entry["schema"] == "welldefined/1" and entry["count"] == len(rows) and "o
 EOF
 echo "ok: the well-definedness facet"
 
-# The examples facet, from the sources: the fixture's one example names `double`.
-cp -r "$work/out-b" "$work/out-b-examples"
-python3 "$root/scripts/examples.py" --dataset "$work/out-b-examples" --source "$work/b" > /dev/null
-python3 - "$work/out-b-examples" <<'EOF3'
-import json, sys
-from pathlib import Path
-d = Path(sys.argv[1])
-rows = {json.loads(l)["decl"]: json.loads(l) for l in (d / "facets" / "examples.jsonl").read_text().splitlines()}
-assert list(rows) == ["Fixture.double"], rows
-[ex] = rows["Fixture.double"]["examples"]
-assert ex["path"] == "Fixture/Uses.lean" and ex["statement"] == "example : double 2 = 4" and not ex["sorry"], ex
-assert any(f["name"] == "examples" and f["schema"] == "examples/1" for f in json.loads((d / "meta.json").read_text())["facets"])
-EOF3
-echo "ok: the examples facet finds the fixture's example"
-
 # The attributes facet, from the sources: `@[specifies …, specifies …]` and `@[claim "…"]` as written.
 cp -r "$work/out-b" "$work/out-b-attributes"
 python3 "$root/scripts/attributes.py" --dataset "$work/out-b-attributes" --source "$work/b" > /dev/null
