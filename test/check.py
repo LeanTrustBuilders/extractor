@@ -157,6 +157,12 @@ def main() -> int:
         for f in failures:
             print(f"FAIL: {f}")
         return 1
+    # B annotates Nat.pred, which it mentions nowhere, as a catalogue would: an upstream node with
+    # the annotation
+    pred = next((d for d in b["decls"] if d["name"] == "Nat.pred"), None)
+    check(pred is not None and pred["scope"] == "upstream", "B: Nat.pred, annotated, is an upstream node")
+    check(any(r["decl"] == "Nat.pred" for r in b["facets"].get("annotation.domain", [])),
+          "B: the annotation of Nat.pred is kept")
     print(f"ok: {len(a['decls'])} nodes in A, {len(b['decls'])} in B; all checks passed")
     return 0
 

@@ -55,3 +55,7 @@ def one : Pos := ⟨1, one_pos'⟩
 instance : Inhabited Pos := ⟨one⟩
 
 end Fixture
+
+-- A catalogue's annotation of a definition the fixture does not own, and mentions nowhere: it is
+-- an upstream node all the same, carrying the annotation.
+attribute [domain (fun n => 0 < n) "the predecessor of 0 is 0"] Nat.pred

@@ -52,7 +52,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/1"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.8.1"
+def extractorVersion : String := "0.8.2"
 
 /-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
 `scripts/check-pins.py` checks the two agree. -/
@@ -415,6 +415,14 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
       targetMemo := memo
       upstreamEdges := upstreamEdges.push (u, #[st, if p then st else me, term, #[]])
     progress t0 s!"upstream closure along {followName follow}: {reached.size} declarations"
+  -- What the project's own annotations are about. A catalogue declares, in a module of its own,
+  -- the domain of another library's definition (`attribute [domain (0 < x)] Real.log`): that
+  -- definition is an upstream node, so that the annotation has a node to sit on, whether or not a
+  -- declaration of the project mentions it.
+  for h : i in [0:env.header.moduleNames.size] do
+    if requested.contains env.header.moduleNames[i] then
+      for e in TrustAnnotations.annotationExt.getModuleEntries env (show ModuleIdx from i) do
+        if !ctx.declModule.contains e.decl && env.contains e.decl then others := others.insert e.decl
   let otherInfos := others.toArray.filterMap fun n => (env.find? n).map (n, ·)
   let otherProp ← runMetaM env do
     otherInfos.mapM fun (n, info) => do
