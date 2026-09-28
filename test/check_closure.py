@@ -42,14 +42,20 @@ def main() -> int:
     ust, ume, ute = (full["edges"][f"upstream-{n}"] for n in ("statement", "meaning", "term"))
     check("HAdd.hAdd" not in full["by_name"] and "HAdd" in up_full,
           "a projection is not a node: it is looked through, to its structure")
-    check("Nat.one_pos" not in full["by_name"], "a lemma called only by a project proof is not reached")
+    check("Nat.one_pos" in up_plain and not any(e.get("Nat.one_pos") for e in (ust, ume, ute)),
+          "a lemma only a project proof uses is a node, and the closure does not follow it")
     proofs = {d["name"] for d in full["decls"] if d["scope"] == "upstream" and d["isProp"]}
     check(proofs, "the closure reaches upstream proofs, through definitions' values")
     check(all(not ute.get(p) for p in proofs), "an upstream proof has no term edges: its proof is not walked")
     check(all(ume.get(p, set()) == ust.get(p, set()) for p in proofs), "an upstream proof means its statement")
 
-    # Nothing stray: every upstream node is reached from the project along the closure's rule.
+    # Nothing stray: every upstream node is an edge's target, and the closure follows, from the
+    # project, statements, and what is not a proof whole; a project proof's own targets are leaves.
     is_prop = {d["name"]: d["isProp"] for d in full["decls"]}
+    targets = set().union(*(ts for notion in ("statement", "meaning", "term", "source", "upstream-statement",
+                                              "upstream-meaning", "upstream-term")
+                            for ts in full["edges"][notion].values()))
+    check(up_full <= targets, f"every upstream node is an edge's target ({len(up_full - targets)} are not)")
     step = lambda n: (full["edges"]["statement"].get(n, set()) | ust.get(n, set()) |
                       (set() if is_prop[n] else full["edges"]["term"].get(n, set()) | ute.get(n, set())))
     seen = set(project(full))
@@ -59,7 +65,8 @@ def main() -> int:
             if t not in seen:
                 seen.add(t)
                 todo.append(t)
-    check(up_full <= seen, f"every upstream node is reached ({len(up_full - seen)} are not)")
+    followed = set(ust) | set(ume) | set(ute)
+    check(followed <= seen, f"the closure follows only what its rule reaches ({len(followed - seen)} more)")
 
     # Facets past the project.
     stmts = {r["decl"]: r for r in full["facets"]["statement"]}

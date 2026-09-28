@@ -73,7 +73,8 @@ Along `term`, a definition's value is followed whole, and a proof contributes it
 
 ```
 meta.json                    what produced it, from what; its edge files and facets; the packages
-decls.jsonl                  one node per line: id, name, module, package, scope, kind, isProp, hashes
+decls.jsonl                  one node per line: id, name, module, package, scope, kind, isProp, hashes;
+                             the nodes are the project's declarations and what their edges point to
 modules.jsonl                one project module per line: name, path, imports, module docstrings
 edges/<notion>.bin           little-endian int32 pairs (source id, target id)
 facets/<facet>.jsonl         at most one line per declaration, keyed by "decl"
@@ -89,7 +90,7 @@ constructor or recursor stands for its inductive type.
 |---|---|
 | `statement` | what its type mentions, proofs erased |
 | `meaning` | what it means: its statement for a proof, its statement and value for a definition, its type and constructors for an inductive type; proofs erased everywhere |
-| `term` | everything the kernel checked of it: its type and value, proofs included, restricted to targets that are nodes (`--no-term` skips it) |
+| `term` | everything the kernel checked of it: its type and value, proofs included (`--no-term` skips it) |
 | `source` | what its source needs that the elaborated term does not mention: coercions, and what a notation expands to |
 
 | hash | changes when |

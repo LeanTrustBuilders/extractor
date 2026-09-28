@@ -17,7 +17,7 @@ The dataset (spec `ltb-dataset/2`, see LeanTrustBuilders/specs) is a directory:
 * `facets/<name>.jsonl`: everything else about declarations, one file per facet, keyed by name.
 
 **Nodes** are the project's own declarations (those a person wrote, private ones included:
-`MeaningGraph.isDeclaration`) and the upstream declarations their statements and meanings rest on.
+`MeaningGraph.isDeclaration`) and the upstream declarations their edges point to.
 Upstream nodes have outgoing edges only with an upstream closure, in `upstream-<notion>` files.
 
 **Notions of dependency** (MeaningGraph's `DeclDeps`, each the edges of one of its walks):
@@ -26,8 +26,8 @@ Upstream nodes have outgoing edges only with an upstream closure, in `upstream-<
 * `meaning`: what it means, proofs erased everywhere: its statement for a proof, its statement and
   value for a definition, its types and constructors for an inductive type. The meaning hash
   follows this graph, and coverage is computed over it;
-* `term`: everything the kernel checked of it, proofs included, restricted to edges whose target is
-  a node. The content hash follows this graph;
+* `term`: everything the kernel checked of it, proofs included. The content hash follows this
+  graph;
 * `source`: what its source needs besides: coercion instances and notation.
 
 ## Parts
@@ -50,11 +50,11 @@ open Lean
 def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.11.0"
+def extractorVersion : String := "0.12.0"
 
 /-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
 whenever that changes, since stored records compare against it. -/
-def localHasherName : String := "ltb-local/2"
+def localHasherName : String := "ltb-local/3"
 
 /-- What to extract, and where to. -/
 structure Config where
@@ -333,18 +333,20 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
     deps := deps.push (n, #[d.statement, d.meaning, if cfg.term then d.term else #[], src])
   progress t0 s!"dependencies of {deps.size} project declarations"
 
-  -- Nodes: the owned declarations, and the targets of their statement and meaning edges.
+  -- Nodes: the owned declarations, and the targets of their statement, meaning and term edges, so
+  -- that each graph reaches everything its hash covers. The upstream closure starts from the
+  -- statement and meaning targets (and, when it follows `term`, from those of what is not a proof).
   let ownedSet : Std.HashSet Name := owned.foldl (·.insert ·) {}
   let mut others : Std.HashSet Name := {}
   let mut roots : Array Name := #[]
   for (((_, d), p), (_, dd)) in (deps.zip ownedProp).zip ownedDeps do
-    -- Under the `term` closure, what a definition's value mentions, proofs included, is followed
-    -- too; a proof's own term never is.
     let followed := if cfg.upstreamClosure == some .term && !p then dd.term else #[]
     for dep in d[0]! ++ d[1]! ++ followed do
       if !ownedSet.contains dep && !others.contains dep && env.contains dep then
         others := others.insert dep
         unless ctx.declModule.contains dep do roots := roots.push dep
+    for dep in d[2]! do
+      if !ownedSet.contains dep && env.contains dep then others := others.insert dep
   -- Past the project: the closure of those upstream targets, along the notion asked for
   -- (`Context.closure`). Each declaration reached is a node, with edges of its own.
   let mut ctx := ctx
@@ -381,8 +383,6 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   let walk ← runMetaM env (ctx.meaningWalk.visit nodeNames)
   let contentWalk ← runMetaM env (ctx.contentWalk.visit nodeNames)
   progress t0 s!"content walk: {contentWalk.blocks.size} blocks{if contentWalk.unresolved > 0 then s!", {contentWalk.unresolved} unresolved" else ""}"
-  let byUserName : Std.HashMap Name Name :=
-    nodeNames.foldl (fun m n => m.insert (privateToUserName n) n) {}
   let mut localMemo : Std.HashMap (Name × Name) UInt64 := {}
   let search ← labelledSearchPath project
   let pkgCache ← IO.mkRef ({} : Std.HashMap Name String)
@@ -390,7 +390,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   for h : i in [0:infos.size] do
     let (name, info) := infos[i]
     let mod := moduleOf name
-    let (lh, memo) := walk.localHash byUserName name localMemo
+    let (lh, memo) := walk.localHash name localMemo
     localMemo := memo
     nodes := nodes.push {
       name, module := mod, pos := positions.getD name 0

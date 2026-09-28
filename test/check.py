@@ -51,7 +51,7 @@ def main() -> int:
     check(m["library"]["commit"] == "A" and m["library"]["root"] == "Fixture", "meta: library")
     check(m["hasher"]["meaning"] == "ltb-meaning/1" and "name" not in m["hasher"], "meta: meaning hasher")
     check("modules" not in m["library"], "meta: no library.modules")
-    check(m["hasher"]["local"] == "ltb-local/2", "meta: local hasher")
+    check(m["hasher"]["local"] == "ltb-local/3", "meta: local hasher")
     check(m["hasher"]["content"] == "ltb-content/1" and "legacy" not in m["hasher"], "meta: content hasher")
     check({e["name"] for e in m["edges"]} == {"statement", "meaning", "term", "source"},
           "meta: edge notions")
@@ -101,6 +101,9 @@ def main() -> int:
     # Each hash's graph: what a declaration means is part of what the kernel checked of it.
     check(all(me.get(d["name"], set()) <= te.get(d["name"], set())
               for d in a["decls"] if d["scope"] == "project"), "A: meaning ⊆ term")
+    # What only a proof uses is a node too, so that `term` reaches everything the content hash covers.
+    check("rfl" in te.get(F + "triple_one", set()) and a["by_name"]["rfl"]["scope"] == "upstream",
+          "A: a lemma only a proof uses is a node, and a term target")
     check(F + "double" in me.get(F + "double_two", set()), "A: meaning double_two → double")
 
     # Hashes between A and B.
