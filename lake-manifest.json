@@ -5,7 +5,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "d46c22562dbba86b2de2e32727c91018b48fe1f7",
+   "rev": "ec3d200e487db2f376d387310e932b5c16377cb1",
    "name": "WellDefined",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",

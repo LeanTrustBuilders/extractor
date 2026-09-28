@@ -72,6 +72,7 @@ the facet `welldefined` into the dataset:
   --theorems-in <Prefix>   analyze every theorem of the modules under this prefix (repeatable)
   --no-annotated           do not analyze the claims and specification theorems (by default, every
                            `@[claim]`, `@[specifies]` and characterization theorem)
+  --no-definitions         do not analyze the bodies of the definitions with a declared domain
   --discharger <tactic>    a tactic to try on each obligation after the default ones (omega,
                            infer_instance, positivity, fun_prop, norm_num, simp_all), typically a
                            catalogue's own (repeatable)
@@ -164,6 +165,7 @@ partial def parseWellDefined (args : List String) (cfg : WellDefinedFacet.Config
   | "--theorems-in" :: v :: rest =>
     parseWellDefined rest { cfg with theoremsIn := cfg.theoremsIn.push v.toName }
   | "--no-annotated" :: rest => parseWellDefined rest { cfg with annotated := false }
+  | "--no-definitions" :: rest => parseWellDefined rest { cfg with definitions := false }
   | "--no-default-dischargers" :: rest =>
     parseWellDefined rest { cfg with defaultDischargers := false }
   | "--discharger" :: v :: rest =>

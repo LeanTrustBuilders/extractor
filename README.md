@@ -285,6 +285,10 @@ the domain), `open` or `unapplied`.
   characterizations stated by one theorem); those named with `--decl` or `--decls-file`; every
   theorem of the modules under `--theorems-in`. Not every lemma by default: in library lemmas a use
   outside the domain is often deliberate.
+- **Which bodies:** every definition with a declared domain has its body analyzed under that
+  domain (`--no-definitions` to skip): each use in it stays inside the domain of what it uses, or its
+  value does not matter there. Its obligations are placed in the `body`, case by case for a
+  definition by cases.
 - **Whose domains:** those of the modules imported. `--module` imports a catalogue alongside the
   library, so that its domains apply; the rows are then keyed by the library's declarations, which
   need not be nodes of the dataset.
@@ -298,9 +302,9 @@ the domain), `open` or `unapplied`.
 
 On Mathlib v4.35.0-rc2 with the Mathlib catalogue (`--module Mathlib --module MathlibCatalogue
 --theorems-in Mathlib.Probability --theorems-in Mathlib.InformationTheory --discharger
-mathlib_catalogue_discharger --jobs 16`): 4,181 theorems, 477 of them using the integral, conditional
-expectation or the Radon–Nikodym derivative, 1,092 obligations, in 84 seconds after a 9-second
-import, at 7 GB.
+mathlib_catalogue_discharger --jobs 16`), with the catalogue's eight domains (the integral,
+conditional expectation, the Radon–Nikodym derivative, `Real.log`, `moment`, `centralMoment`, `mgf`,
+`cgf`): 4,181 theorems and 8 bodies, 1,318 obligations, in 80 seconds after the import, at 7 GB.
 
 ## Build
 

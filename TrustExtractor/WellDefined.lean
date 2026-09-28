@@ -21,6 +21,10 @@ findings the design avoids. By default, the declarations whose statements a read
 Others are added by name (`--decl`, `--decls-file`: the claims a project lists elsewhere, such as
 `formalization.yaml`), or all theorems of some modules (`--theorems-in`), to study the analyzer.
 
+**Which bodies.** Every definition with a declared domain has its body analyzed under that domain
+(the *inside* obligation): whether it relies on a junk value inside its own domain. Its row's
+obligations are then placed in the `body`.
+
 **The facet** `welldefined` (schema `welldefined/1`) has one row per declaration analyzed, keyed by
 name: `{decl, obligations}`, each obligation as `WellDefined.Obligation.asJson` writes it, or
 `{decl, error}`. A declaration need not be a node of the dataset: a catalogue's dataset holds its
@@ -43,6 +47,8 @@ structure Config where
   theoremsIn : Array Name := #[]
   /-- Whether to analyze the claims and specification theorems. -/
   annotated : Bool := true
+  /-- Whether to analyze the bodies of the definitions with a declared domain. -/
+  definitions : Bool := true
   /-- Dischargers tried after the analyzer's default ones: a catalogue's own, typically. -/
   dischargers : Array String := #[]
   /-- Whether to try the analyzer's default dischargers. -/
@@ -119,9 +125,18 @@ def analyze (cfg : Config) : IO (Array Row × WellDefined.Analyzer × Environmen
   let todo := todo.filter env.contains
   progress t0 s!"{a.domains.size} declared domains; {todo.size} declarations to analyze; \
     dischargers {", ".intercalate (a.dischargers.map (·.text)).toList}"
+  -- the definitions with a declared domain, whose bodies are analyzed
+  let bodies : NameSet := if !cfg.definitions then {} else
+    a.domains.foldl (init := {}) fun s n _ => match env.find? n with
+      | some (.defnInfo _) => s.insert n
+      | _ => s
+  let todo := todo ++ (bodies.toArray.qsort (·.toString < ·.toString)).filter (!todo.contains ·)
+  progress t0 s!"{bodies.size} of them definitions whose bodies are analyzed"
   let run (ns : Array Name) : IO (Array Row) := ns.mapM fun n => do
     try
-      return { decl := n, obligations := ← runMetaM env (a.obligationsOf n) }
+      let obs ← runMetaM env do
+        if bodies.contains n then a.bodyObligationsOf n else a.obligationsOf n
+      return { decl := n, obligations := obs }
     catch e => return { decl := n, error := some (toString e) }
   let k := max 1 cfg.jobs
   let chunk := (todo.size + k - 1) / k
@@ -161,7 +176,7 @@ def run (cfg : Config) : IO Unit := do
       ("heartbeats", toJson a.cfg.heartbeats),
       ("domains", Json.arr (domains.map fun d =>
         Json.mkObj [("decl", toJson d.decl.toString), ("source", toJson d.source)])),
-      ("targets", Json.mkObj [("annotated", toJson cfg.annotated),
+      ("targets", Json.mkObj [("annotated", toJson cfg.annotated), ("definitions", toJson cfg.definitions),
         ("decls", toJson (cfg.decls.map (·.toString))),
         ("theoremsIn", toJson (cfg.theoremsIn.map (·.toString)))]),
       ("description", toJson "Each application of a definition with a declared domain, in the \
