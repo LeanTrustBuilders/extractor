@@ -79,23 +79,24 @@ edges/<notion>.bin           little-endian int32 pairs (source id, target id)
 facets/<facet>.jsonl         at most one line per declaration, keyed by "decl"
 ```
 
-**The rule** `ltb-meaning/1` (MeaningGraph's `MeaningGraph.Hash`) decides the declarations, the
-`statement` and `meaning` edges and the meaning and local hashes in one walk, so the graph and the
-hashes agree. Proofs are erased everywhere, helpers are looked through, and a constructor or
-recursor stands for its inductive type.
+**The rule** `ltb-meaning/1` (MeaningGraph's `MeaningGraph.Hash`) decides the declarations, and two
+walks under it give each hash with its graph: the walk that erases proofs gives the `statement` and
+`meaning` edges and the meaning and local hashes, and the walk that keeps proofs gives the `term`
+edges and the content hash. So each hash follows its graph. Helpers are looked through, and a
+constructor or recursor stands for its inductive type.
 
 | notion | edges from a declaration to |
 |---|---|
 | `statement` | what its type mentions, proofs erased |
 | `meaning` | what it means: its statement for a proof, its statement and value for a definition, its type and constructors for an inductive type; proofs erased everywhere |
-| `term` | what its type and whole value mention, proofs included (`--no-term` skips it) |
+| `term` | everything the kernel checked of it: its type and value, proofs included, restricted to targets that are nodes (`--no-term` skips it) |
 | `source` | what its source needs that the elaborated term does not mention: coercions, and what a notation expands to |
 
 | hash | changes when |
 |---|---|
 | `meaning` | anything in its `meaning` closure changes, down to Lean core; not on renames |
 | `local` | the declaration itself is rewritten, not when something it uses changes |
-| `content` | as `meaning`, but through proofs: a proof anywhere underneath changes |
+| `content` | anything in its `term` closure changes, proofs included |
 
 **Facets:** `docstring`, `source` (path, range, keyword), `axioms` (and whether `sorryAx` is among
 them), `statement` (binders with their roles, conclusion, body, fields or constructors, as Lean

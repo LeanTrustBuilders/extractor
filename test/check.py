@@ -96,7 +96,11 @@ def main() -> int:
     so = a["edges"]["source"]
     notation = next((d["name"] for d in a["decls"] if "𝟚" in d["name"]), None)
     check(notation is not None and F + "double" in so.get(notation, set()) and
-          F + "double" not in me.get(notation, set()), "A: a notation's expansion is a source edge only")
+          F + "double" not in me.get(notation, set()) and F + "double" not in te.get(notation, set()),
+          "A: a notation's expansion is a source edge only")
+    # Each hash's graph: what a declaration means is part of what the kernel checked of it.
+    check(all(me.get(d["name"], set()) <= te.get(d["name"], set())
+              for d in a["decls"] if d["scope"] == "project"), "A: meaning ⊆ term")
     check(F + "double" in me.get(F + "double_two", set()), "A: meaning double_two → double")
 
     # Hashes between A and B.
