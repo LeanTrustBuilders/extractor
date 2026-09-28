@@ -3,7 +3,7 @@ import TrustExtractor
 open Lean TrustExtractor
 
 def usage : String := "\
-trust-extract: extract an S2 dataset (ltb-dataset/0) from a compiled Lean project.
+trust-extract: extract an S2 dataset (ltb-dataset/2) from a compiled Lean project.
 
 Run inside the project, under `lake env`:
 
@@ -252,6 +252,6 @@ unsafe def main (args : List String) : IO UInt32 := do
   | ["version"] =>
     IO.println s!"trust-extract {extractorVersion}, dataset spec {datasetSpec}, \
       meaning hash {MeaningGraph.Hash.Rule.meaning.name}, local hash {localHasherName}, \
-      content hash semantic_hash {semanticHashRevision}, Lean {Lean.versionString}"
+      content hash {MeaningGraph.Hash.contentHasherName}, Lean {Lean.versionString}"
     return 0
   | _ => IO.eprintln usage; return 2

@@ -2,17 +2,13 @@ name = "TrustExtractor"
 version = "0.1.0"
 defaultTargets = ["trust-extract"]
 
-# Dependency analysis: the notions of dependency (statement, meaning, term) come from here.
+# Dependency analysis: the notions of dependency (statement, meaning, term), and the three hashes
+# (meaning, local, content), come from here.
 [[require]]
 name = "MeaningGraph"
 git = "https://github.com/LeanTrustBuilders/meaning-graph"
 # `main` follows the newest toolchain; branches `lean-v<toolchain>` carry the same code for older ones.
 rev = "main"
-
-[[require]]
-name = "semantic_hash"
-git = "https://github.com/mathlib-initiative/semantic_hash"
-rev = "0496f6d7b650cb03c9ffc61089ffd400dfd98564"
 
 [[require]]
 name = "TrustAnnotations"

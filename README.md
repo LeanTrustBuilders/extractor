@@ -1,6 +1,6 @@
 # extractor
 
-`trust-extract` reads a compiled Lean project and writes a **dataset** (spec `ltb-dataset/1`, see
+`trust-extract` reads a compiled Lean project and writes a **dataset** (spec `ltb-dataset/2`, see
 [LeanTrustBuilders/specs](https://github.com/LeanTrustBuilders/specs)): its declarations, the three
 hashes of each declaration's key, its dependencies under four notions, and facets such as
 docstrings, source locations and annotations. It also checks a dataset with Lean's kernel
@@ -12,9 +12,7 @@ reads `.olean` files, so it is the one released per Lean toolchain. Everything d
 dataset and needs no Lean.
 
 Built on [MeaningGraph](https://github.com/LeanTrustBuilders/meaning-graph) (dependencies, and the
-meaning and local hashes), [semantic_hash](https://github.com/mathlib-initiative/semantic_hash) (the
-content hash) and
-[TrustAnnotations](https://github.com/LeanTrustBuilders/annotations). The dataset layout follows
+three hashes) and [TrustAnnotations](https://github.com/LeanTrustBuilders/annotations). The dataset layout follows
 the index format of [trust](https://github.com/chrisflav/trust).
 
 ## Use
@@ -79,7 +77,8 @@ own copy, with different proofs. An environment keeps the copy of the first modu
 order, which depends on the modules a part imports. So the **content** hash of a declaration whose
 proof rests on such a lemma, its **term** edges, and the module recorded for such a lemma can
 differ between two splits: on Tau Ceti at 8befae0, 4 parts against 8 gave 287 different content
-hashes out of 97,944, 8 different term edges out of 5.9 million, and 4 different modules. The
+hashes out of 97,944 (semantic_hash's, the content hash before 0.9.0; the content walk hashes the
+same copies), 8 different term edges out of 5.9 million, and 4 different modules. The
 meaning and local hashes, the statement and meaning edges, and the facets did not differ. With the
 same split, two extractions are byte-identical, on different machines too (Tau Ceti at 8befae0 on
 a laptop and on a GitHub runner). `meta.json` records the number of parts (`producer.parts`);
@@ -155,13 +154,11 @@ upstream declaration the closure reaches. Upstream nodes have outgoing edges onl
 |---|---|
 | `meaning` (`ltb-meaning/1`) | a Merkle hash of the declaration's content under the rule, each reference replaced by the referenced constant's meaning hash. Deep: changes when anything in its `meaning` closure changes, down to Lean core |
 | `local` (`ltb-local/2`) | the same content, with references to other declarations by name. Changes when the declaration itself is rewritten, not when something it uses changes |
-| `content` | semantic_hash's proof-relevant hash. Deep, and also changes when a proof changes; trust's certificates are keyed by it |
+| `content` (`ltb-content/1`) | the same Merkle hash from a second walk that keeps proofs: a theorem's proof and an opaque constant's value are content, and each reference is replaced by the referenced constant's content hash. Deep through proofs: changes when a proof anywhere underneath changes |
 
-All three are invariant under renaming binders and universe parameters, and the meaning hash is
-invariant under renaming the declaration itself, and the declarations it uses, which is how reviews
-follow renames. Each node also carries, as `legacy`, the meaning and local hashes of
-`ltb-dataset/0` (semantic_hash's proof-irrelevant hash, `ltb-local-v1`), so that records keyed by
-them can still be compared.
+All three are invariant under renaming binders and universe parameters, and the meaning and content
+hashes are invariant under renaming the declaration itself, and the declarations it uses, which is
+how reviews follow renames.
 
 **Facets:** `docstring`, `source` (path, range, and the keyword the declaration is written with, such
 as `theorem` or `lemma`), `axioms` (and whether `sorryAx` is among them), `statement`, and one

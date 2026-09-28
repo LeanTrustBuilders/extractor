@@ -1,9 +1,7 @@
 import MeaningGraph
 import MeaningGraph.Hash
-import SemanticHash
 import TrustAnnotations
 import TrustExtractor.Util
-import TrustExtractor.Hash
 import TrustExtractor.Source
 import TrustExtractor.Packages
 import TrustExtractor.Statement
@@ -11,7 +9,7 @@ import TrustExtractor.Statement
 /-!
 # Extraction: a compiled project to an S2 dataset
 
-The dataset (spec `ltb-dataset/0`, see LeanTrustBuilders/specs) is a directory:
+The dataset (spec `ltb-dataset/2`, see LeanTrustBuilders/specs) is a directory:
 
 * `meta.json`: what produced the dataset, from what, and which edge files and facets it holds;
 * `decls.jsonl`: one line per node — identity, kind, and the three hashes of the declaration key;
@@ -49,14 +47,14 @@ namespace TrustExtractor
 open Lean
 
 /-- The dataset specification this extractor writes. -/
-def datasetSpec : String := "ltb-dataset/1"
+def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.8.3"
+def extractorVersion : String := "0.9.0"
 
-/-- The semantic_hash revision this extractor is built against. Must match `lakefile.toml`;
-`scripts/check-pins.py` checks the two agree. -/
-def semanticHashRevision : String := "0496f6d7b650cb03c9ffc61089ffd400dfd98564"
+/-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
+whenever that changes, since stored records compare against it. -/
+def localHasherName : String := "ltb-local/2"
 
 /-- What to extract, and where to. -/
 structure Config where
@@ -170,19 +168,13 @@ structure NodeInfo where
   meaning : Option String
   content : Option String
   localHash : String
-  /-- The hashes datasets had before the rule (spec `ltb-dataset/0`): semantic_hash's
-  proof-irrelevant hash, and the local hash `ltb-local-v1`. Records keyed by them are compared
-  through these. -/
-  legacyMeaning : Option String := none
-  legacyLocal : String := ""
 deriving Inhabited
 
 def NodeInfo.asJson (n : NodeInfo) : Json :=
   Json.mkObj [("name", toJson n.name.toString), ("module", toJson n.module.toString),
     ("pos", toJson n.pos), ("package", toJson n.package), ("project", toJson n.project),
     ("kind", toJson n.kind), ("isProp", toJson n.isProp), ("meaning", toJson n.meaning),
-    ("content", toJson n.content), ("local", toJson n.localHash),
-    ("legacyMeaning", toJson n.legacyMeaning), ("legacyLocal", toJson n.legacyLocal)]
+    ("content", toJson n.content), ("local", toJson n.localHash)]
 
 def NodeInfo.ofJson (j : Json) : Except String NodeInfo := do
   return { name := (← j.getObjValAs? String "name").toName
@@ -192,9 +184,7 @@ def NodeInfo.ofJson (j : Json) : Except String NodeInfo := do
            isProp := ← j.getObjValAs? Bool "isProp"
            meaning := (j.getObjValAs? String "meaning").toOption
            content := (j.getObjValAs? String "content").toOption
-           localHash := ← j.getObjValAs? String "local"
-           legacyMeaning := (j.getObjValAs? String "legacyMeaning").toOption
-           legacyLocal := (j.getObjValAs? String "legacyLocal").toOption.getD "" }
+           localHash := ← j.getObjValAs? String "local" }
 
 /-- The notions of dependency, in the order their edge files are written. -/
 def notionNames : Array String := #["statement", "meaning", "term", "source"]
@@ -432,11 +422,12 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   let infos := ownedInfos ++ otherInfos
   let isProp := ownedProp ++ otherProp
   let nodeNames := infos.map (·.1)
-  -- Hashes: the rule's meaning and local hashes; semantic_hash's proof-relevant hash as the content
-  -- hash; and, for records keyed before the rule, the hashes datasets had then.
+  -- Hashes: the rule's meaning and local hashes, and the content hash, the same Merkle hash from a
+  -- second walk that keeps proofs (`ltb-content/1`).
   walk ← runMetaM env (walk.visit nodeNames)
-  let hashes ← SemanticHash.Hashing.runBoth env
-  progress t0 "semantic hashes"
+  let contentWalk ← runMetaM env
+    ((MeaningGraph.Hash.Walk.new env (keepProofs := true)).visit nodeNames)
+  progress t0 s!"content walk: {contentWalk.blocks.size} blocks{if contentWalk.unresolved > 0 then s!", {contentWalk.unresolved} unresolved" else ""}"
   let byUserName : Std.HashMap Name Name :=
     nodeNames.foldl (fun m n => m.insert (privateToUserName n) n) {}
   let mut localMemo : Std.HashMap (Name × Name) UInt64 := {}
@@ -454,10 +445,8 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
       project := MeaningGraph.isProjectLocalConst env cfg.root name
       kind := kindOf env name info, isProp := isProp[i]!
       meaning := (walk.meaning? name).map hex16
-      content := (hashes.fullHashes.get? name).map hex16
-      localHash := hex16 lh
-      legacyMeaning := (hashes.proofIrrelHashes.get? name).map hex16
-      legacyLocal := hex16 (← (localHash env info : IO UInt64)) }
+      content := (contentWalk.content? name).map hex16
+      localHash := hex16 lh }
 
   -- Edges, by name.
   let edges := deps
@@ -624,10 +613,7 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
     let hs := Json.mkObj <|
       (match n.meaning with | some h => [("meaning", toJson h)] | none => []) ++
       (match n.content with | some h => [("content", toJson h)] | none => []) ++
-      [("local", toJson n.localHash)] ++
-      [("legacy", Json.mkObj <|
-        (match n.legacyMeaning with | some h => [("meaning", toJson h)] | none => []) ++
-        [("local", toJson n.legacyLocal)])]
+      [("local", toJson n.localHash)]
     Json.mkObj [("id", toJson i), ("name", toJson n.name.toString),
       ("module", toJson n.module.toString), ("package", toJson n.package),
       ("scope", toJson (if n.project then "project" else "upstream")), ("kind", toJson n.kind),
@@ -745,11 +731,7 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
     ("lean", Json.mkObj [("version", toJson Lean.versionString), ("githash", toJson Lean.githash)]),
     ("hasher", Json.mkObj [("name", toJson MeaningGraph.Hash.Rule.meaning.name),
       ("meaning", toJson MeaningGraph.Hash.Rule.meaning.name), ("local", toJson localHasherName),
-      ("content", Json.mkObj [("name", toJson "semantic_hash"),
-        ("revision", toJson semanticHashRevision), ("variant", toJson "proof-relevant")]),
-      ("legacy", Json.mkObj [("name", toJson "semantic_hash"),
-        ("revision", toJson semanticHashRevision), ("meaning", toJson "proof-irrelevant"),
-        ("local", toJson legacyLocalHasherName)])]),
+      ("content", toJson MeaningGraph.Hash.contentHasherName)]),
     ("counts", Json.mkObj [("nodes", toJson nodes.size), ("project", toJson projectNodes.size),
       ("upstream", toJson upstreamNodes.size)]),
     ("modules", Json.mkObj [("file", toJson "modules.jsonl"), ("count", toJson moduleList.size)]),
