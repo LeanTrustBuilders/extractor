@@ -80,14 +80,20 @@ echo "ok: the kernel checks every closure, and catches a dropped edge"
 # Well-definedness: the fixture declares no domain, so the claim and the specification theorem are
 # analyzed with no obligation; the facet and its entry in meta.json are written all the same.
 cp -r "$work/out-b" "$work/out-b-wd"
-(cd "$work/b" && lake env "$bin" welldefined --dataset "$work/out-b-wd" --decl Fixture.double_zero >/dev/null)
+(cd "$work/b" && lake env "$bin" welldefined --dataset "$work/out-b-wd" --decl Fixture.double_zero \
+  --decl Nat.add_comm >/dev/null)
 python3 - "$work/out-b-wd" <<'EOF'
 import json, sys
 from pathlib import Path
 d = Path(sys.argv[1])
 rows = [json.loads(l) for l in (d / "facets/welldefined.jsonl").read_text().splitlines()]
-names = {r["decl"] for r in rows}
+names = [r["decl"] for r in rows]
 assert "Fixture.double_zero" in names, names
+# S2's order: rows about nodes in node order, then the others (Nat.add_comm, not a node) by name
+ids = {json.loads(l)["name"]: json.loads(l)["id"] for l in (d / "decls.jsonl").read_text().splitlines()}
+nodes = [n for n in names if n in ids]
+assert names == nodes + sorted(n for n in names if n not in ids), names
+assert nodes == sorted(nodes, key=ids.get) and "Nat.add_comm" in names, names
 assert all(r.get("obligations") == [] for r in rows), rows
 [entry] = [f for f in json.loads((d / "meta.json").read_text())["facets"] if f["name"] == "welldefined"]
 assert entry["schema"] == "welldefined/1" and entry["count"] == len(rows) and "omega" in entry["dischargers"], entry

@@ -163,6 +163,18 @@ def run (cfg : Config) : IO Unit := do
     let name := "welldefined"
     let file := s!"facets/{name}.jsonl"
     IO.FS.createDirAll (cfg.dataset / "facets")
+    -- S2's order: rows about nodes in node order, then the others by name
+    let mut ids : Std.HashMap String Nat := {}
+    if ← (cfg.dataset / "decls.jsonl").pathExists then
+      for line in ← IO.FS.lines (cfg.dataset / "decls.jsonl") do
+        if line.isEmpty then continue
+        let j ← IO.ofExcept (Json.parse line)
+        ids := ids.insert (← IO.ofExcept (j.getObjValAs? String "name")) (← IO.ofExcept (j.getObjValAs? Nat "id"))
+    let key (r : Row) : Nat × String :=
+      match ids[r.decl.toString]? with
+      | some i => (i, "")
+      | none => (ids.size, r.decl.toString)
+    let rows := rows.qsort fun r s => let (i, a) := key r; let (j, b) := key s; i < j || (i == j && a < b)
     writeJsonl (cfg.dataset / file) (rows.map (·.asJson))
     let metaPath := cfg.dataset / "meta.json"
     let metaJson ← IO.ofExcept (Json.parse (← IO.FS.readFile metaPath))

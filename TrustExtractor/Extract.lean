@@ -50,7 +50,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.9.0"
+def extractorVersion : String := "0.10.0"
 
 /-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
 whenever that changes, since stored records compare against it. -/
@@ -574,7 +574,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
 /-! ## Merging parts into a dataset -/
 
 /-- Merges parts and writes the dataset. -/
-def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (project : String)
+def writeDataset (cfg : Config) (parts : Array Part) (project : String)
     (unavailable : Array Name) (t0 : Nat) : IO Unit := do
   let commit ← if cfg.commit.isEmpty then
       pure ((← commandOutput? "git" #["rev-parse", "HEAD"]).getD "")
@@ -725,12 +725,11 @@ def writeDataset (cfg : Config) (parts : Array Part) (mods : Array Name) (projec
       ("parts", toJson parts.size)]),
     ("library", Json.mkObj [("root", toJson cfg.root.toString), ("package", toJson project),
       ("repo", toJson cfg.repo), ("commit", toJson commit), ("dirty", toJson dirty),
-      ("modules", toJson mods.size),
       ("unavailable", toJson (unavailable.map toString))]),
     ("toolchain", toJson toolchain),
     ("lean", Json.mkObj [("version", toJson Lean.versionString), ("githash", toJson Lean.githash)]),
-    ("hasher", Json.mkObj [("name", toJson MeaningGraph.Hash.Rule.meaning.name),
-      ("meaning", toJson MeaningGraph.Hash.Rule.meaning.name), ("local", toJson localHasherName),
+    ("hasher", Json.mkObj [("meaning", toJson MeaningGraph.Hash.Rule.meaning.name),
+      ("local", toJson localHasherName),
       ("content", toJson MeaningGraph.Hash.contentHasherName)]),
     ("counts", Json.mkObj [("nodes", toJson nodes.size), ("project", toJson projectNodes.size),
       ("upstream", toJson upstreamNodes.size)]),
@@ -812,7 +811,7 @@ def extract (cfg : Config) : IO Unit := do
     for t in tasks do
       parts := parts ++ (← IO.ofExcept t.get)
   try IO.FS.removeDirAll workDir catch _ => pure ()
-  writeDataset cfg parts mods project unavailable t0
+  writeDataset cfg parts project unavailable t0
 
 /-- The `extract-part` subcommand: collects one part and writes it as JSON. Exits with
 `importFailedExit` when importing fails, so that the caller splits the part. -/

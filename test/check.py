@@ -49,7 +49,8 @@ def main() -> int:
     pinned = (Path(__file__).resolve().parents[1] / "lean-toolchain").read_text().strip()
     check(m["toolchain"] == pinned, f"meta: toolchain is {m['toolchain']}, not the extractor's {pinned}")
     check(m["library"]["commit"] == "A" and m["library"]["root"] == "Fixture", "meta: library")
-    check(m["hasher"]["name"] == m["hasher"]["meaning"] == "ltb-meaning/1", "meta: meaning hasher")
+    check(m["hasher"]["meaning"] == "ltb-meaning/1" and "name" not in m["hasher"], "meta: meaning hasher")
+    check("modules" not in m["library"], "meta: no library.modules")
     check(m["hasher"]["local"] == "ltb-local/2", "meta: local hasher")
     check(m["hasher"]["content"] == "ltb-content/1" and "legacy" not in m["hasher"], "meta: content hasher")
     check({e["name"] for e in m["edges"]} == {"statement", "meaning", "term", "source"},
