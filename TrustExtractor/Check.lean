@@ -460,7 +460,7 @@ def check (cfg : Config) : IO (Array Row) := do
   -- Blocks, built once. A block is a node if one of its constants is a node of the dataset. Only the
   -- blocks to check get a declaration for the kernel.
   let erase? := cfg.notion == "meaning"
-  let blockNames := (projectConsts.map (blockOfName.getD · .anonymous)).toList.eraseDups.toArray
+  let blockNames := dedup (projectConsts.map (blockOfName.getD · .anonymous))
   let (blocks, failures) ← runMetaM env do
     let mut blocks : Std.HashMap Name Block := {}
     let mut failures := 0
@@ -473,7 +473,7 @@ def check (cfg : Config) : IO (Array Row) := do
         blk := { (← mkBlock ren false want b) with note := some s!"not erased: {← e.toMessageData.toString}" }
       -- The project constants it mentions, by block.
       let ms := blk.mentions.filterMap fun o => (blockOfName.get? o).filter (· != b)
-      blocks := blocks.insert b { blk with mentions := ms.toList.eraseDups.toArray }
+      blocks := blocks.insert b { blk with mentions := dedup ms }
     return (blocks, failures)
   progress t0 s!"{projectConsts.size} project constants in {blocks.size} blocks{if failures > 0 then s!", {failures} not erased" else ""}"
 
@@ -515,7 +515,7 @@ def check (cfg : Config) : IO (Array Row) := do
       else for x in ← throughHelpers 1000 m {m} do ment := ment.insert x
     let un := ment.toArray.filter fun m => m != b && !closureSet.contains m
     unlisted := unlisted.insert i (un.qsort (·.toString < ·.toString))
-    jobs := jobs.push (i, b, closure.toList.eraseDups.toArray)
+    jobs := jobs.push (i, b, dedup closure)
   progress t0 s!"checking {jobs.size} declarations along `{cfg.notion}`"
 
   -- Each verdict is turned into a row inside its task: a kernel exception holds an environment
@@ -550,7 +550,7 @@ declarations failed. -/
 def run (cfg : Config) : IO Nat := do
   let rows ← check cfg
   let count (k : String) := (rows.filter (·.kernel == k)).size
-  let missingConsts := (rows.flatMap (·.missing)).toList.eraseDups.length
+  let missingConsts := (dedup (rows.flatMap (·.missing))).size
   let unlisted := (rows.filter (!·.unlisted.isEmpty)).size
   IO.println s!"{rows.size} declarations checked along `{cfg.notion}`: {count "ok"} ok, \
     {count "missing"} with constants missing from their closure ({missingConsts} distinct), \

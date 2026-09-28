@@ -54,4 +54,15 @@ def commandOutput? (cmd : String) (args : Array String) (cwd : Option System.Fil
     if out.exitCode == 0 then return some out.stdout.trimAscii.toString else return none
   catch _ => return none
 
+/-- The first occurrence of each element, in order. (`List.eraseDups` is quadratic: on Mathlib's
+constants, it does not finish.) -/
+def dedup {α} [BEq α] [Hashable α] (xs : Array α) : Array α := Id.run do
+  let mut seen : Std.HashSet α := {}
+  let mut out := #[]
+  for x in xs do
+    if !seen.contains x then
+      seen := seen.insert x
+      out := out.push x
+  return out
+
 end TrustExtractor

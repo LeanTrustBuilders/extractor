@@ -50,7 +50,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.12.0"
+def extractorVersion : String := "0.12.1"
 
 /-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
 whenever that changes, since stored records compare against it. -/
@@ -480,12 +480,12 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   -- Annotations on any node. Several parts may report the same one; the merge keeps one copy.
   let nodeSet : Std.HashSet Name := nodeNames.foldl (·.insert ·) {}
   let entries := (TrustAnnotations.entries env).filter (nodeSet.contains ·.decl)
-  let attrs := (entries.map (·.attr)).toList.eraseDups.toArray
+  let attrs := dedup (entries.map (·.attr))
   for attr in attrs do
     -- One row per declaration: an attribute may be applied to it more than once
     -- (`@[specifies f, specifies g]`).
     let ofAttr := entries.filter (·.attr == attr)
-    let decls := (ofAttr.map (·.decl)).toList.eraseDups.toArray
+    let decls := dedup (ofAttr.map (·.decl))
     let rows := decls.map fun d => Json.mkObj [("decl", toJson d.toString),
       ("entries", Json.arr ((ofAttr.filter (·.decl == d)).map fun e =>
         (Json.parse e.payload).toOption.getD (toJson e.payload)))]
