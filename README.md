@@ -69,6 +69,13 @@ records the split. With the same split, two extractions are byte-identical.
 every upstream declaration reached becomes a node, with its edges in `upstream-<notion>` files.
 Along `term`, a definition's value is followed whole, and a proof contributes its statement only.
 
+**Packages.** Every node's `package` is the Lake name of the package declaring it, read from the
+workspace's `lake-manifest.json`, so a declaration has the same label in every dataset: Mathlib's
+are `mathlib` in Mathlib's own dataset as downstream of it. The project is labelled by the root
+package's name (`--package` overrides it; without a manifest, the root prefix), a dependency by its
+name in the manifest, found by its directory with symbolic links resolved, and the toolchain's own
+library is `lean4`.
+
 ## The dataset
 
 ```

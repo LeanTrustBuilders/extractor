@@ -54,6 +54,27 @@ if ! diff -r "$work/cmp-1" "$work/cmp-3" >/dev/null; then
 fi
 echo "ok: extracting in parts, in parallel, gives the same dataset"
 
+# A dependency linked in from elsewhere is still that dependency: with TrustAnnotations moved out of
+# the packages directory and linked back, nothing changes, its package label included.
+mv "$work/a/.lake/packages/TrustAnnotations" "$work/TrustAnnotations-elsewhere"
+ln -s "$work/TrustAnnotations-elsewhere" "$work/a/.lake/packages/TrustAnnotations"
+(cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a-link" --commit A --repo test/fixture >/dev/null)
+unlink "$work/a/.lake/packages/TrustAnnotations"
+mv "$work/TrustAnnotations-elsewhere" "$work/a/.lake/packages/TrustAnnotations"
+if ! diff -r "$work/out-a" "$work/out-a-link" >/dev/null; then
+  echo "FAIL: a dependency linked in from elsewhere changes the dataset" >&2
+  diff -r "$work/out-a" "$work/out-a-link" | head -20 >&2
+  exit 1
+fi
+python3 - "$work/out-a/meta.json" <<'EOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+names = {p["name"] for p in m["packages"]}
+assert m["library"]["package"] == "Fixture", m["library"]["package"]
+assert {"Fixture", "TrustAnnotations", "lean4"} <= names, names
+EOF
+echo "ok: a dependency linked in from elsewhere keeps its package"
+
 cp -r "$work/a" "$work/b"
 cp -r "$here/fixture-b/." "$work/b/"
 (cd "$work/b" && lake build -q >/dev/null)

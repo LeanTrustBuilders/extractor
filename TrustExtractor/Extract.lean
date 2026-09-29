@@ -50,7 +50,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.12.1"
+def extractorVersion : String := "0.13.0"
 
 /-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
 whenever that changes, since stored records compare against it. -/
@@ -748,7 +748,7 @@ def extract (cfg : Config) : IO Unit := do
     progress t0 s!"skipping {unavailable.size} modules: {cfg.skip.size} named, and those importing them"
   let skipped : Std.HashSet Name := unavailable.foldl (·.insert ·) {}
   let mods := found.filter (!skipped.contains ·)
-  let project := if cfg.project.isEmpty then cfg.root.toString else cfg.project
+  let project ← projectLabel cfg.project cfg.root
   let workDir := cfg.out.withFileName (cfg.out.fileName.getD "dataset" ++ ".parts")
   IO.FS.createDirAll workDir
   let n := max 1 (min cfg.parts mods.size)
@@ -770,7 +770,7 @@ def extract (cfg : Config) : IO Unit := do
 `importFailedExit` when importing fails, so that the caller splits the part. -/
 def extractPart (cfg : Config) (mods : Array Name) (out : System.FilePath) : IO UInt32 := do
   let t0 ← IO.monoMsNow
-  let project := if cfg.project.isEmpty then cfg.root.toString else cfg.project
+  let project ← projectLabel cfg.project cfg.root
   let part? ← try
       pure (some (← collectPart cfg mods project t0))
     catch e =>

@@ -17,7 +17,8 @@ Options for `extract`:
   --module <Module>    import this module instead of discovering them (repeatable)
   --repo <owner/name>  the project's repository, recorded in meta.json
   --commit <sha>       the project's commit (default: git rev-parse HEAD)
-  --package <name>     the project's package label (default: the root prefix)
+  --package <name>     the project's package label (default: its Lake package name, from
+                       lake-manifest.json; without one, the root prefix)
   --parts <n>          split the work into n parts from the start (default: 1). A part that
                        cannot import its modules, typically because the process runs out of
                        memory mappings (vm.max_map_count), is split in two and retried
