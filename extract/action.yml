@@ -45,7 +45,9 @@ inputs:
     description: Publish the dataset as this release tag of the current repository (dataset-<commit12>).
     default: ''
   replace:
-    description: When the release exists, replace its dataset.
+    description: >-
+      When the release exists and holds a dataset by this same release of trust-extract, replace it
+      anyway. A dataset by another release is always replaced.
     default: 'false'
   title:
     description: The release's title.
@@ -127,7 +129,11 @@ runs:
         read -r spec commit library < <(python3 -c "import json,sys; m=json.load(open(sys.argv[1])); l=m['library']; print(m['spec'], l.get('commit',''), l.get('repo') or l.get('root',''))" "$DATASET/meta.json")
         notes="The dataset (S2, $spec) of $library at $commit, by $VERSION (LeanTrustBuilders/extractor)."
         if gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-          if [ "$REPLACE" != "true" ]; then echo "$TAG is already published"; exit 0; fi
+          # The notes say which release of trust-extract made the dataset, and in which format.
+          old=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body -q .body)
+          if [ "$REPLACE" != "true" ] && [ "$old" = "$notes" ]; then
+            echo "$TAG is already published, by $VERSION"; exit 0
+          fi
           gh release upload "$TAG" "$RUNNER_TEMP/dataset.tar.gz" -R "$GITHUB_REPOSITORY" --clobber
           gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes "$notes"
           echo "replaced the dataset of $TAG"
