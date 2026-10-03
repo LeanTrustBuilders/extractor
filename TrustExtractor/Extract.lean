@@ -50,7 +50,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.13.0"
+def extractorVersion : String := "0.13.1"
 
 /-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
 whenever that changes, since stored records compare against it. -/
