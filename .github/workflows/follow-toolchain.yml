@@ -1,0 +1,33 @@
+name: Follow Mathlib's toolchain
+# Every hour: when Mathlib's master moves to another Lean toolchain and MeaningGraph, TrustAnnotations
+# and WellDefined have followed, keep the old one on the branch lean-v<old toolchain>, move main to
+# the new one once it builds and passes the fixture test, and release it: the tag
+# v<version>-lean-v<toolchain>, and the Release workflow on it. A build that fails opens an issue
+# (follow-toolchain/, ci/follow-toolchain.sh).
+on:
+  schedule:
+    - cron: '45 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  actions: write    # start the Release workflow on the new tag
+
+concurrency:
+  group: follow-toolchain
+  cancel-in-progress: false
+
+jobs:
+  follow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: ./follow-toolchain
+        with:
+          deps: annotations meaning-graph well-defined
+          test: python3 scripts/check-pins.py && test/run.sh
+          release: extractor

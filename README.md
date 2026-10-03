@@ -24,6 +24,13 @@ A `.olean` file can only be read by the Lean that wrote it, so the extractor is 
 toolchain: `v<version>-lean-<toolchain>`, e.g. `v0.10.0-lean-v4.35.0-rc2`. Take the newest release
 whose tag ends with your project's toolchain. `trust-extract --help` lists every option.
 
+A release comes out for each toolchain Mathlib's master moves to. Every hour, the workflow Follow
+Mathlib's toolchain checks: once MeaningGraph, TrustAnnotations and WellDefined have moved, it keeps
+the old toolchain on a branch `lean-v<toolchain>`, moves `main` to the new one if it builds and
+passes the fixture test, and releases it; a build that fails opens an issue labelled `toolchain`.
+Older toolchains keep their releases but get no new ones. The four repositories share that
+workflow's action, `follow-toolchain/`.
+
 **In GitHub Actions**, once the library is built:
 
 ```yaml

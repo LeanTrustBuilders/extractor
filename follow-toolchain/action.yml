@@ -1,0 +1,36 @@
+name: Follow Mathlib's Lean toolchain
+description: >-
+  Moves a LeanTrustBuilders Lean repository to the Lean toolchain Mathlib's master is on, once the
+  repositories it requires have moved: a branch lean-v<old toolchain> keeps the old one, main is built
+  and tested on the new one, pushed and released. A build that fails opens an issue instead. Run it
+  from a checkout of main with its history (fetch-depth 0), with permissions contents, issues (and
+  for the extractor, actions) write.
+inputs:
+  deps:
+    description: The LeanTrustBuilders repositories this one requires, by name, which move first.
+    default: ''
+  build:
+    description: The lake targets to build on the new toolchain.
+    default: ''
+  test:
+    description: A command to run after the build.
+    default: ''
+  release:
+    description: >-
+      `tag` (a tag v<toolchain> and a GitHub release) or `extractor` (a tag
+      v<version>-lean-v<toolchain>, and the Release workflow started on it).
+    default: tag
+  token:
+    description: A token that can push to this repository, open issues and start workflows.
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DEPS: ${{ inputs.deps }}
+        BUILD: ${{ inputs.build }}
+        TEST: ${{ inputs.test }}
+        RELEASE: ${{ inputs.release }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: bash "$GITHUB_ACTION_PATH/../ci/follow-toolchain.sh"
