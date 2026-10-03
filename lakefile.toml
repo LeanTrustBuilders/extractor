@@ -8,19 +8,19 @@ defaultTargets = ["trust-extract"]
 name = "MeaningGraph"
 git = "https://github.com/LeanTrustBuilders/meaning-graph"
 # `main` follows the newest toolchain; branches `lean-v<toolchain>` carry the same code for older ones.
-rev = "main"
+rev = "lean-v4.35.0-rc2"
 
 [[require]]
 name = "TrustAnnotations"
 git = "https://github.com/LeanTrustBuilders/annotations"
 # Like MeaningGraph: `main` follows the newest toolchain, `lean-v<toolchain>` older ones.
-rev = "main"
+rev = "lean-v4.35.0-rc2"
 
 # The well-definedness analyzer, for `trust-extract welldefined`.
 [[require]]
 name = "WellDefined"
 git = "https://github.com/LeanTrustBuilders/well-defined"
-rev = "main"
+rev = "lean-v4.35.0-rc2"
 
 
 [[lean_lib]]
