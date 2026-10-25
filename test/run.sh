@@ -27,7 +27,8 @@ cp "$root/lean-toolchain" "$work/a/lean-toolchain"
 rev=$(python3 -c "import json, sys; print(next(p['rev'] for p in json.load(open(sys.argv[1]))['packages'] if p['name'] == 'TrustAnnotations'))" "$root/lake-manifest.json")
 sed -i "s/^rev = .*/rev = \"$rev\"/" "$work/a/lakefile.toml"
 (cd "$work/a" && lake build -q >/dev/null)
-(cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a" --commit A --repo test/fixture)
+(cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a" --commit A --repo test/fixture) \
+  2> >(tee "$work/a.err" >&2)
 (cd "$work/a" && lake env "$bin" extract --root Fixture --out "$work/out-a2" --commit A --repo test/fixture)
 if ! diff -r "$work/out-a" "$work/out-a2" >/dev/null; then
   echo "FAIL: two extractions of the same commit differ" >&2
@@ -78,7 +79,15 @@ echo "ok: a dependency linked in from elsewhere keeps its package"
 cp -r "$work/a" "$work/b"
 cp -r "$here/fixture-b/." "$work/b/"
 (cd "$work/b" && lake build -q >/dev/null)
-(cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b" --commit B --repo test/fixture)
+(cd "$work/b" && lake env "$bin" extract --root Fixture --out "$work/out-b" --commit B --repo test/fixture) \
+  2> >(tee "$work/b.err" >&2)
+# A panic is a failure even when the dataset comes out right: 0.13.3 asked every node for its structure's
+# parents, and Lean panicked on each that was not a structure, hundreds of thousands of times on Mathlib.
+sleep 1  # the tee processes finish writing
+if grep -h "PANIC" "$work/a.err" "$work/b.err" >&2; then
+  echo "FAIL: the extractor panicked" >&2
+  exit 1
+fi
 
 python3 "$here/check.py" "$work/out-a" "$work/out-b"
 

@@ -72,6 +72,15 @@ def main() -> int:
         check(d is not None and d["kind"] == kind and d["scope"] == "project",
               f"A: {name} is a project {kind} (got {d and (d['scope'], d['kind'])})")
     check(a["by_name"][F + "triple_pos"]["isProp"] is True, "A: triple_pos is a proof")
+    # Signatures show what each binder ranges over, as doc-gen4's do (`pp.funBinderTypes`), and a
+    # structure's row says what it extends, as doc-gen4's header does: before 0.13.2 an existential
+    # printed as `∃ m, ∃ (_ : …), …`, and before 0.13.3 no row said what a structure extends.
+    sigs = {r["decl"]: r for r in a["facets"]["signature"]}
+    ex = sigs.get(F + "exists_double", {}).get("text", "")
+    check("∃ (m : Nat)" in ex and ": m ≤ 2 * n)" in ex, f"A: an existential shows its binders' types ({ex!r})")
+    big = sigs.get(F + "BigPos", {}).get("extends", [])
+    check([p["text"] for p in big] == ["Fixture.Pos"], f"A: BigPos's signature says it extends Pos ({big!r})")
+    check("extends" not in sigs.get(F + "Pos", {}), "A: Pos extends nothing")
     check(a["by_name"][F + "double"]["isProp"] is False, "A: double is not a proof")
     check(a["by_name"][F + "double"]["module"] == "Fixture.Basic", "A: module of double")
     check(a["by_name"][F + "double_triple"]["module"] == "Fixture.Uses", "A: module of double_triple")

@@ -50,7 +50,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.13.1"
+def extractorVersion : String := "0.13.4"
 
 /-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
 whenever that changes, since stored records compare against it. -/
@@ -474,7 +474,9 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
   if cfg.signatures then
     let rows ← signatureRows env nodeNames cfg.refs
     facets := facets.push (facetInfo "signature" "signature/1" "every node's signature as Lean prints \
-        it (`name (x : α) … : β`), for hovers; with `refs`, as in the statement facet", rows)
+        it (`name (x : α) … : β`, binders with their types), for hovers; with `refs`, as in the \
+        statement facet; for a structure that extends others, `extends`: each parent's type, as \
+        doc-gen4's header shows it", rows)
     progress t0 "signature facet"
 
   -- Annotations on any node. Several parts may report the same one; the merge keeps one copy.

@@ -115,7 +115,9 @@ constructor or recursor stands for its inductive type.
 
 **Facets:** `docstring`, `source` (path, range, keyword), `axioms` (and whether `sorryAx` is among
 them), `statement` (binders with their roles, conclusion, body, fields or constructors, as Lean
-prints them, with the constant each identifier stands for), `signature` (every node's, for hovers),
+prints them, with the constant each identifier stands for), `signature` (every node's, for hovers,
+binders with their types and printed whole, as doc-gen4 prints them; for a structure, what it
+`extends`),
 and one `annotation.<attr>` per attribute recorded in the TrustAnnotations extension, including
 attributes defined after this release. `--no-statements`, `--no-refs`, `--no-signatures` and
 `--no-upstream-docs` leave out what a consumer does not show.

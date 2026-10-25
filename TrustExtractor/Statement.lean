@@ -25,7 +25,8 @@ defined under them.
   `ℕ` that says what `Nat` is. `--no-refs` leaves them out.
 
 The `signature` facet is each node's signature as Lean prints it (`name (x : α) … : β`), for
-project and upstream nodes alike: what a hover shows for a constant. With `refs`, it records the
+project and upstream nodes alike: what a hover shows for a constant; for a structure, also what it
+extends, as doc-gen4's header shows it. With `refs`, it records the
 constants it names as the statement facet does, the declaration's own name left out. Both facets are computed in
 parallel chunks, each with its own `MetaM` run.
 -/
@@ -34,9 +35,15 @@ namespace TrustExtractor
 
 open Lean Meta
 
-/-- Pretty-printing options: a bounded number of delaborator steps, proofs elided. -/
+/-- Pretty-printing options: a bounded number of delaborator steps, proofs elided, and the types of
+binders shown, `∃ (f : X ⟶ Y), …` and `fun (x : α) => …`, as doc-gen4 shows them: without the types,
+a statement that quantifies existentially hides what it quantifies over. -/
 def ppOptions (steps : Nat) (o : Options) : Options :=
-  pp.proofs.set (pp.maxSteps.set o steps) false
+  pp.funBinderTypes.set (pp.proofs.set (pp.maxSteps.set o steps) false) true
+
+/-- The delaborator steps a signature or a statement's type may take: Lean's default, as doc-gen4 has
+it, so that a long statement is printed whole and not cut short with `⋯`. -/
+def sigSteps : Nat := 5000
 
 /-- Pretty-prints `e` in at most `steps` delaborator steps, on lines of 100 characters. -/
 def ppBounded (e : Expr) (steps : Nat) : MetaM String := do
@@ -127,7 +134,7 @@ def bindersJson (xs : Array Expr) (withRefs : Bool) : MetaM (Array Json) :=
     let decl ← x.fvarId!.getDecl
     let head := (headConst? decl.type).map (·.toString)
     return Json.mkObj <| [("name", toJson (binderDisplayName decl.userName))] ++
-      (← textFields "type" decl.type 2000 withRefs) ++
+      (← textFields "type" decl.type sigSteps withRefs) ++
       [("role", toJson (← binderRole decl)), ("explicit", toJson decl.binderInfo.isExplicit),
        ("implicit", toJson (decl.binderInfo.isImplicit || decl.binderInfo.isStrictImplicit))] ++
       (head.map fun h => [("head", toJson h)]).getD []
@@ -143,13 +150,13 @@ def membersJson (name : Name) (params : Array Expr) (withRefs : Bool) : MetaM (S
     let fields ← forallTelescope ty fun ys _ => ys.mapM fun y => do
       let decl ← y.fvarId!.getDecl
       return Json.mkObj <| [("name", toJson decl.userName.eraseMacroScopes.toString)] ++
-        (← textFields "type" decl.type 2000 withRefs)
+        (← textFields "type" decl.type sigSteps withRefs)
     return ("fields", fields)
   let ctors ← ind.ctors.toArray.mapM fun c => do
     let some info := env.find? c | return Json.null
     let ty ← instantiateForall info.type params
     return Json.mkObj <| [("name", toJson (c.replacePrefix name .anonymous).toString)] ++
-      (← textFields "type" ty 2000 withRefs)
+      (← textFields "type" ty sigSteps withRefs)
   return ("constructors", ctors)
 
 /-- The `statement` facet row of one declaration. -/
@@ -160,7 +167,7 @@ def statementRow (name : Name) (info : ConstantInfo) (isProp : Bool) (withRefs :
   forallTelescope info.type fun xs body => do
     let mut fields : List (String × Json) := [("decl", toJson name.toString),
       ("binders", toJson (← bindersJson xs withRefs))]
-    fields := fields ++ (← textFields "conclusion" body 2000 withRefs)
+    fields := fields ++ (← textFields "conclusion" body sigSteps withRefs)
     if let some h := headConst? body then fields := fields ++ [("conclusionHead", toJson h.toString)]
     match info with
     | .defnInfo v =>
@@ -190,20 +197,43 @@ def statementRows (env : Environment) (targets : Array (Name × ConstantInfo × 
     IO (Array Json) :=
   rowsInParallel env targets fun (name, info, isProp) => statementRow name info isProp withRefs
 
-/-- The `signature` facet rows of `names`: each constant's signature as Lean prints it. -/
+/-- The structures a structure extends, as doc-gen4 shows them in its header (`extends P₁, P₂`): the
+type of each parent projection at the structure's parameters, printed as signatures are. `none` for
+anything else, and for a structure that extends nothing. -/
+def parentsJson (name : Name) (withRefs : Bool) : MetaM (Option Json) := do
+  let env ← getEnv
+  -- `getStructureInfo?`, not `getStructureParentInfo`, which panics on anything but a structure.
+  let some structInfo := getStructureInfo? env name | return none
+  let parents := structInfo.parentInfo
+  let some info := env.find? name | return none
+  if parents.isEmpty then return none
+  let us := info.levelParams.map mkLevelParam
+  forallTelescopeReducing info.type fun params _ =>
+    withLocalDeclD `self (mkAppN (mkConst name us) params) fun s => do
+      let items ← parents.mapM fun parent => do
+        let ty ← inferType (mkApp (mkAppN (mkConst parent.projFn us) params) s)
+        if withRefs then
+          let (text, refs) ← ppWithRefs ty sigSteps
+          return Json.mkObj [("text", toJson text), ("refs", refs)]
+        return Json.mkObj [("text", toJson (← ppBounded ty sigSteps))]
+      return some (Json.arr items)
+
+/-- The `signature` facet rows of `names`: each constant's signature as Lean prints it, and for a
+structure that extends others, those it extends (`extends`). -/
 def signatureRows (env : Environment) (names : Array Name) (withRefs : Bool := false) :
     IO (Array Json) :=
   rowsInParallel env names fun name => do
+    let parents := ((← parentsJson name withRefs).map fun p => [("extends", p)]).getD []
     if withRefs then
-      let fwi ← withOptions (fun o => (ppOptions 400 o).setBool `pp.tagAppFns true)
+      let fwi ← withOptions (fun o => (ppOptions sigSteps o).setBool `pp.tagAppFns true)
         (PrettyPrinter.ppSignature name)
       let tt := Widget.TaggedText.prettyTagged fwi.fmt (w := 100)
       let ((), (out, _, refs)) := (layOut fwi.infos tt).run (#[], 0, #[])
       let text := String.join out.toList
       let refs := (cleanRefs text refs).filter (·.2.2 != name)
-      return Json.mkObj [("decl", toJson name.toString), ("text", toJson text),
-        ("refs", Json.arr (refs.map fun (s, t, c) => Json.arr #[toJson s, toJson t, toJson c.toString]))]
-    let fwi ← withOptions (ppOptions 400) (PrettyPrinter.ppSignature name)
-    return Json.mkObj [("decl", toJson name.toString), ("text", toJson (fwi.fmt.pretty 100))]
+      return Json.mkObj ([("decl", toJson name.toString), ("text", toJson text),
+        ("refs", Json.arr (refs.map fun (s, t, c) => Json.arr #[toJson s, toJson t, toJson c.toString]))] ++ parents)
+    let fwi ← withOptions (ppOptions sigSteps) (PrettyPrinter.ppSignature name)
+    return Json.mkObj ([("decl", toJson name.toString), ("text", toJson (fwi.fmt.pretty 100))] ++ parents)
 
 end TrustExtractor
