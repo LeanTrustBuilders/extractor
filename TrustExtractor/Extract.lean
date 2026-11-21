@@ -50,7 +50,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.14.0"
+def extractorVersion : String := "0.14.1"
 
 /-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
 whenever that changes, since stored records compare against it. -/
@@ -316,6 +316,16 @@ def relativePath (cwd path : System.FilePath) : String :=
   if s.startsWith c then (s.drop c.length).toString
   else if s.startsWith "./" then (s.drop 2).toString else s
 
+/-- A source file's path as the dataset records it: relative to the directory of the workspace
+package it is in when it is a dependency's (its path in that package's repository), else relative to
+the working directory. -/
+def recordedPath (ws : Workspace) (cwd file : System.FilePath) : IO String := do
+  let f := (← realPathOrSelf file).toString
+  for (_, dir) in ws.packages do
+    let d := dir.toString ++ "/"
+    if f.startsWith d then return (f.drop d.length).toString
+  return relativePath cwd file
+
 /-- Collects one part: imports `mods` and reports on the project declarations of those modules.
 The caller must have run `enableInitializersExecution`, so that the imported modules' extensions
 (among them `TrustAnnotations`') are registered and filled. -/
@@ -449,6 +459,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
     owned.mapM fun n => return (n, ← findDeclarationRanges? n)
   let texts ← IO.mkRef ({} : Std.HashMap Name (Option (String × System.FilePath)))
   let cwd ← IO.currentDir
+  let ws ← readWorkspace
   let mut srcRows : Array Json := #[]
   for (name, range?) in ranges do
     let some range := range? | continue
@@ -463,7 +474,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
         pure f
     let some (text, path) := file? | continue
     let pos := text.toFileMap.ofPosition range.range.pos
-    let relPath := relativePath cwd path
+    let relPath ← recordedPath ws cwd path
     let loc : SourceLoc := {
       path := relPath
       startLine := range.range.pos.line, startCol := range.range.charUtf16
@@ -526,7 +537,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
     let imports := (env.header.moduleData[idx.toNat]!.imports.map (·.module.toString)).toList.eraseDups.toArray
     let docs := ((getModuleDoc? env mod).getD #[]).map (·.doc)
     let path ← match ← findSource? cfg.srcDirs mod with
-      | some p => pure (relativePath cwd p)
+      | some p => recordedPath ws cwd p
       | none => pure ""
     moduleRows := moduleRows.push (Json.mkObj [("name", toJson mod.toString), ("path", toJson path),
       ("imports", toJson imports), ("doc", toJson docs)])
