@@ -97,8 +97,10 @@ partial def parseOpts (args : List String) (cfg : Config) (extra : List (String 
   | "--root" :: v :: rest => parseOpts rest { cfg with roots := cfg.roots.push v.toName } extra
   | "--out" :: v :: rest => parseOpts rest { cfg with out := v } extra
   | "--src-dir" :: v :: rest =>
-    let dirs := if cfg.srcDirs == #[("." : System.FilePath)] then #[] else cfg.srcDirs
-    parseOpts rest { cfg with srcDirs := dirs.push (v : System.FilePath) } extra
+    -- The first --src-dir replaces the default `.`; the others add to it (`.` itself included).
+    let given := (extra.lookup "src-dir-given").isSome
+    parseOpts rest { cfg with srcDirs := (if given then cfg.srcDirs else #[]).push (v : System.FilePath) }
+      (if given then extra else ("src-dir-given", "") :: extra)
   | "--module" :: v :: rest => parseOpts rest { cfg with modules := cfg.modules.push v.toName } extra
   | "--repo" :: v :: rest => parseOpts rest { cfg with repo := v } extra
   | "--commit" :: v :: rest => parseOpts rest { cfg with commit := v } extra
