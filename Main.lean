@@ -11,14 +11,18 @@ Run inside the project, under `lake env`:
   trust-extract version
 
 Options for `extract`:
-  --root <Prefix>      root module prefix of the project (required), e.g. TauCeti
+  --root <Prefix>      root module prefix of the project (required), e.g. TauCeti. Repeatable:
+                       the project is then the modules under any of the roots, a root of a
+                       dependency included, e.g. --root LMLExplore --root LeanMachineLearning. A
+                       root found in none of the --src-dir is looked for in the workspace's
+                       packages
   --out <dir>          output directory (default: dataset)
   --src-dir <dir>      where the project's sources are (repeatable; default: .)
   --module <Module>    import this module instead of discovering them (repeatable)
   --repo <owner/name>  the project's repository, recorded in meta.json
   --commit <sha>       the project's commit (default: git rev-parse HEAD)
-  --package <name>     the project's package label (default: its Lake package name, from
-                       lake-manifest.json; without one, the root prefix)
+  --package <name>     the package label of the first root (default: its Lake package name,
+                       from lake-manifest.json; without one, the root prefix)
   --parts <n>          split the work into n parts from the start (default: 1). A part that
                        cannot import its modules, typically because the process runs out of
                        memory mappings (vm.max_map_count), is split in two and retried
@@ -90,7 +94,7 @@ partial def parseOpts (args : List String) (cfg : Config) (extra : List (String 
     Except String (Config × List (String × String)) :=
   match args with
   | [] => .ok (cfg, extra)
-  | "--root" :: v :: rest => parseOpts rest { cfg with root := v.toName } extra
+  | "--root" :: v :: rest => parseOpts rest { cfg with roots := cfg.roots.push v.toName } extra
   | "--out" :: v :: rest => parseOpts rest { cfg with out := v } extra
   | "--src-dir" :: v :: rest =>
     let dirs := if cfg.srcDirs == #[("." : System.FilePath)] then #[] else cfg.srcDirs
@@ -127,7 +131,7 @@ partial def parseCheck (args : List String) (cfg : Check.Config) (strict : Bool)
     Except String (Check.Config × Bool) :=
   match args with
   | [] => .ok (cfg, strict)
-  | "--root" :: v :: rest => parseCheck rest { cfg with root := v.toName } strict
+  | "--root" :: v :: rest => parseCheck rest { cfg with roots := cfg.roots.push v.toName } strict
   | "--dataset" :: v :: rest => parseCheck rest { cfg with dataset := v } strict
   | "--notion" :: v :: rest => parseCheck rest { cfg with notion := v } strict
   | "--module" :: v :: rest => parseCheck rest { cfg with modules := cfg.modules.push v.toName } strict
@@ -188,10 +192,10 @@ unsafe def main (args : List String) : IO UInt32 := do
   enableInitializersExecution
   match args with
   | "extract" :: rest =>
-    match parseOpts rest { root := .anonymous } [] with
+    match parseOpts rest { roots := #[] } [] with
     | .error e => IO.eprintln s!"{e}\n\n{usage}"; return 2
     | .ok (cfg, extra) =>
-      if cfg.root.isAnonymous then
+      if cfg.roots.isEmpty then
         IO.eprintln s!"--root is required\n\n{usage}"; return 2
       try
         let listed ← match extra.lookup "skip-modules-file" with
@@ -204,7 +208,7 @@ unsafe def main (args : List String) : IO UInt32 := do
         IO.eprintln s!"error: {e}"; return 1
   | "extract-part" :: rest =>
     -- Internal: one part of an extraction, run in a child process by `extract`.
-    match parseOpts rest { root := .anonymous } [] with
+    match parseOpts rest { roots := #[] } [] with
     | .error e => IO.eprintln e; return 2
     | .ok (cfg, extra) =>
       let some modsFile := extra.lookup "modules-file" | IO.eprintln "--modules-file"; return 2
@@ -213,10 +217,10 @@ unsafe def main (args : List String) : IO UInt32 := do
       try extractPart cfg mods.toArray out catch e =>
         IO.eprintln s!"error: {e}"; return 1
   | "check" :: rest =>
-    match parseCheck rest { root := .anonymous } false with
+    match parseCheck rest { roots := #[] } false with
     | .error e => IO.eprintln s!"{e}\n\n{usage}"; return 2
     | .ok (cfg, strict) =>
-      if cfg.root.isAnonymous then
+      if cfg.roots.isEmpty then
         IO.eprintln s!"--root is required\n\n{usage}"; return 2
       try
         let failed ← Check.run cfg
