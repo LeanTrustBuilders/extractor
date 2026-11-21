@@ -29,6 +29,8 @@ structure Workspace where
   root : String := ""
   /-- Each dependency's name and directory, symbolic links resolved. -/
   packages : Array (String × System.FilePath) := #[]
+  /-- Where each dependency fetched from git comes from: its repository's URL and its commit. -/
+  origins : Std.HashMap String (String × String) := {}
 
 /-- `p` with its symbolic links resolved, or `p` itself if it cannot be (it does not exist). -/
 def realPathOrSelf (p : System.FilePath) : IO System.FilePath := do
@@ -41,14 +43,17 @@ def readWorkspace : IO Workspace := do
   let .ok j := Json.parse (← IO.FS.readFile file) | return {}
   let packagesDir := (j.getObjValAs? String "packagesDir").toOption.getD ".lake/packages"
   let mut packages := #[]
+  let mut origins : Std.HashMap String (String × String) := {}
   for p in (j.getObjValAs? (Array Json) "packages").toOption.getD #[] do
     let .ok name := p.getObjValAs? String "name" | continue
+    if let (.ok url, .ok rev) := (p.getObjValAs? String "url", p.getObjValAs? String "rev") then
+      origins := origins.insert name (url, rev)
     -- A path dependency names its directory; any other lives in the packages directory.
     let dir : System.FilePath := match p.getObjValAs? String "type", p.getObjValAs? String "dir" with
       | .ok "path", .ok d => d
       | _, _ => System.FilePath.mk packagesDir / name
     packages := packages.push (name, ← realPathOrSelf dir)
-  return { root := (j.getObjValAs? String "name").toOption.getD "", packages }
+  return { root := (j.getObjValAs? String "name").toOption.getD "", packages, origins }
 
 /-- The project's package label: `label` (`--package`) if any, else the root package's name in the
 workspace's manifest, else the root module prefix. -/

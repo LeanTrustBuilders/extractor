@@ -50,7 +50,7 @@ open Lean
 def datasetSpec : String := "ltb-dataset/2"
 
 /-- This extractor's version. -/
-def extractorVersion : String := "0.13.1"
+def extractorVersion : String := "0.14.0"
 
 /-- The name of the local hash, `MeaningGraph.Hash.Walk.localHash`, recorded in `meta.json`. Bump it
 whenever that changes, since stored records compare against it. -/
@@ -58,11 +58,14 @@ def localHasherName : String := "ltb-local/3"
 
 /-- What to extract, and where to. -/
 structure Config where
-  /-- The project's root module prefix, e.g. `TauCeti`. -/
-  root : Name
-  /-- Directories to look for the project's sources in. -/
+  /-- The project's root module prefixes, e.g. `TauCeti`. With several, the project is the modules
+  under any of them, which may belong to several packages of the workspace: a project and the
+  dependencies it is extracted together with. -/
+  roots : Array Name
+  /-- Directories to look for the project's sources in. A root that none of them has is looked for
+  in the directories of the workspace's packages. -/
   srcDirs : Array System.FilePath := #["."]
-  /-- Modules to import. Empty means every module under `srcDirs` with the `root` prefix. -/
+  /-- Modules to import. Empty means every module under `srcDirs` with a root prefix. -/
   modules : Array Name := #[]
   /-- The directory the dataset is written to. -/
   out : System.FilePath := "dataset"
@@ -70,7 +73,7 @@ structure Config where
   repo : String := ""
   /-- The project's commit. Empty means `git rev-parse HEAD` in the working directory. -/
   commit : String := ""
-  /-- The package label of the project. Empty means the root prefix. -/
+  /-- The package label of the project's first root. Empty means its Lake package name. -/
   project : String := ""
   /-- Whether to compute the `axioms` facet. -/
   axioms : Bool := true
@@ -118,6 +121,29 @@ partial def discoverUnder (dir : System.FilePath) (pref : Name) : IO (Array Name
     else if entry.fileName.endsWith ".lean" then
       acc := acc.push (pref.str (entry.fileName.dropEnd 5).toString)
   return acc
+
+/-- Whether the module `m` is under one of the root prefixes `roots`. -/
+def inRoots (roots : Array Name) (m : Name) : Bool := roots.any (MeaningGraph.hasPrefixName m ·)
+
+/-- Whether one of `dirs` has the sources of the root prefix `root`: its module or its directory. -/
+def hasRoot (dirs : Array System.FilePath) (root : Name) : IO Bool :=
+  dirs.anyM fun d => do
+    return (← (d / modulePath root).pathExists) ||
+      (← (d / System.mkFilePath (root.components.map toString)).isDir)
+
+/-- `srcDirs`, with the directory of the workspace package that has a root's sources added when none
+of `srcDirs` does: a root of a dependency (`--root LeanMachineLearning` in a project that requires
+it) needs no `--src-dir`. -/
+def withRootDirs (srcDirs : Array System.FilePath) (roots : Array Name) : IO (Array System.FilePath) := do
+  let ws ← readWorkspace
+  let mut dirs := srcDirs
+  for r in roots do
+    if ← hasRoot dirs r then continue
+    for (_, p) in ws.packages do
+      if ← hasRoot #[p] r then
+        dirs := dirs.push p
+        break
+  return dirs
 
 /-- The project's modules: the root module if it has a file, and every module under the root's
 directory, sorted so that the dataset does not depend on the order the file system lists them. -/
@@ -304,7 +330,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
 
   -- The project declarations of the requested modules, in module order. Declarations are those a
   -- person wrote, private ones included (`MeaningGraph.isDeclaration`, the rule `ltb-meaning/1`).
-  let ctx := MeaningGraph.Context.of env cfg.root
+  let ctx := MeaningGraph.Context.ofModules env (inRoots cfg.roots)
   progress t0 s!"dependency tables: {ctx.constants.size} project constants, {ctx.exposed.size} exposed"
   let mut positions : Std.HashMap Name Nat := {}
   let mut ownedInfos : Array (Name × ConstantInfo) := #[]
@@ -395,7 +421,7 @@ def collectPart (cfg : Config) (mods : Array Name) (project : String) (t0 : Nat)
     nodes := nodes.push {
       name, module := mod, pos := positions.getD name 0
       package := ← packageOf search pkgCache mod
-      project := MeaningGraph.isProjectLocalConst env cfg.root name
+      project := (MeaningGraph.moduleNameOf env name).any (inRoots cfg.roots)
       kind := kindOf env name info, isProp := isProp[i]!
       meaning := (walk.meaning? name).map hex16
       content := (contentWalk.content? name).map hex16
@@ -666,9 +692,22 @@ def writeDataset (cfg : Config) (parts : Array Part) (project : String)
     for (n, ms, rs) in p.packages do
       pkgModules := pkgModules.insert n (ms.foldl (·.insert ·) (pkgModules.getD n {}))
       pkgRequires := pkgRequires.insert n (rs.foldl (·.insert ·) (pkgRequires.getD n {}))
+  -- The project's packages, each with its roots, and where each dependency comes from.
+  let mut pkgRoots : Std.HashMap String (Array String) := {}
+  for r in cfg.roots do
+    if let some n := projectNodes.find? (MeaningGraph.hasPrefixName ·.module r) then
+      pkgRoots := pkgRoots.insert n.package ((pkgRoots.getD n.package #[]).push r.toString)
+  let ws ← readWorkspace
   let packagesJson := (pkgModules.toArray.qsort (·.1 < ·.1)).map fun (n, ms) =>
-    Json.mkObj [("name", toJson n), ("modules", toJson ms.size),
+    let base := [("name", toJson n), ("modules", toJson ms.size),
       ("requires", toJson ((pkgRequires.getD n {}).toArray.qsort (· < ·)))]
+    let proj := match pkgRoots.get? n with
+      | some rs => [("project", toJson true), ("roots", toJson rs)]
+      | none => []
+    let origin := match ws.origins.get? n with
+      | some (url, rev) => [("url", toJson url), ("rev", toJson rev)]
+      | none => []
+    Json.mkObj (base ++ proj ++ origin)
 
   let metaJson := Json.mkObj [
     ("spec", toJson datasetSpec),
@@ -676,7 +715,7 @@ def writeDataset (cfg : Config) (parts : Array Part) (project : String)
     -- the one thing a dataset can depend on (see the README).
     ("producer", Json.mkObj [("name", toJson "trust-extract"), ("version", toJson extractorVersion),
       ("parts", toJson parts.size)]),
-    ("library", Json.mkObj [("root", toJson cfg.root.toString), ("package", toJson project),
+    ("library", Json.mkObj [("root", toJson cfg.roots[0]!.toString), ("package", toJson project),
       ("repo", toJson cfg.repo), ("commit", toJson commit), ("dirty", toJson dirty),
       ("unavailable", toJson (unavailable.map toString))]),
     ("toolchain", toJson toolchain),
@@ -711,7 +750,8 @@ partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Nam
   let outFile := workDir / s!"part-{label}.json"
   IO.FS.writeFile modsFile ("\n".intercalate (mods.toList.map toString))
   let srcArgs := cfg.srcDirs.foldl (fun a d => a ++ #["--src-dir", d.toString]) #[]
-  let args := #["extract-part", "--root", cfg.root.toString, "--modules-file", modsFile.toString,
+  let rootArgs := cfg.roots.foldl (fun a r => a ++ #["--root", r.toString]) #[]
+  let args := #["extract-part"] ++ rootArgs ++ #["--modules-file", modsFile.toString,
       "--part-out", outFile.toString] ++ srcArgs ++ (if cfg.axioms then #[] else #["--no-axioms"]) ++
     (if cfg.statements then #[] else #["--no-statements"]) ++
     (if cfg.refs then #[] else #["--no-refs"]) ++ (if cfg.signatures then #[] else #["--no-signatures"]) ++
@@ -740,15 +780,37 @@ partial def runPart (cfg : Config) (workDir : System.FilePath) (mods : Array Nam
 /-- Extracts the dataset: runs the parts in child processes and merges them. -/
 def extract (cfg : Config) : IO Unit := do
   let t0 ← IO.monoMsNow
-  let found ← if cfg.modules.isEmpty then discoverModules cfg.srcDirs cfg.root else pure cfg.modules
+  -- A root none of the source directories has is a dependency's: its sources are in its package's
+  -- directory, and only the modules its dependents import are built.
+  let depRoots ← cfg.roots.filterM fun r => return !(← hasRoot cfg.srcDirs r)
+  let cfg := { cfg with srcDirs := ← withRootDirs cfg.srcDirs cfg.roots }
+  let mut found := cfg.modules
+  let mut unbuilt : Array Name := #[]
   if found.isEmpty then
-    throw <| IO.userError s!"no modules found under the prefix `{cfg.root}` in {cfg.srcDirs}"
+    initSearchPath (← findSysroot)
+    let sp ← searchPathRef.get
+    for r in cfg.roots do
+      let ms ← discoverModules cfg.srcDirs r
+      if ms.isEmpty then
+        throw <| IO.userError s!"no modules found under the prefix `{r}` in {cfg.srcDirs}"
+      if depRoots.contains r then
+        for m in ms do
+          -- `findWithExt` finds the directory of the module's root, not the file itself.
+          let built ← match ← sp.findWithExt "olean" m with
+            | some f => f.pathExists
+            | none => pure false
+          if built then found := found.push m else unbuilt := unbuilt.push m
+      else found := found ++ ms
+    found := (found.qsort (·.toString < ·.toString)).toList.eraseDups.toArray
+  if !unbuilt.isEmpty then
+    progress t0 s!"{unbuilt.size} modules under a dependency's root are not built: not extracted"
   let unavailable ← if cfg.skip.isEmpty then pure #[] else withImporters cfg.srcDirs found cfg.skip
+  let unavailable := (unavailable ++ unbuilt).qsort (·.toString < ·.toString)
   if !unavailable.isEmpty then
-    progress t0 s!"skipping {unavailable.size} modules: {cfg.skip.size} named, and those importing them"
+    progress t0 s!"not extracting {unavailable.size} modules: unbuilt, named with --skip-module, or importing those"
   let skipped : Std.HashSet Name := unavailable.foldl (·.insert ·) {}
   let mods := found.filter (!skipped.contains ·)
-  let project ← projectLabel cfg.project cfg.root
+  let project ← projectLabel cfg.project cfg.roots[0]!
   let workDir := cfg.out.withFileName (cfg.out.fileName.getD "dataset" ++ ".parts")
   IO.FS.createDirAll workDir
   let n := max 1 (min cfg.parts mods.size)
@@ -770,7 +832,7 @@ def extract (cfg : Config) : IO Unit := do
 `importFailedExit` when importing fails, so that the caller splits the part. -/
 def extractPart (cfg : Config) (mods : Array Name) (out : System.FilePath) : IO UInt32 := do
   let t0 ← IO.monoMsNow
-  let project ← projectLabel cfg.project cfg.root
+  let project ← projectLabel cfg.project cfg.roots[0]!
   let part? ← try
       pure (some (← collectPart cfg mods project t0))
     catch e =>
