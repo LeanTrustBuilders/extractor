@@ -5,7 +5,9 @@ description: >-
   it as a release of this repository if asked.
 inputs:
   root:
-    description: The library's root module (TauCeti, LeanMachineLearning).
+    description: >-
+      The library's root module (TauCeti, LeanMachineLearning), or several separated by spaces, the
+      roots of dependencies extracted with it among them (LMLExplore LeanMachineLearning Statlib).
     required: true
   repo:
     description: The library's repository, owner/name, for links into its sources.
@@ -90,14 +92,15 @@ runs:
         # Every imported module maps several files: allow more mappings per process, so that the
         # extraction needs fewer parts.
         sudo sysctl -q -w vm.max_map_count=262144 || true
-        (cd "$DIRECTORY" && lake env "$bin" extract --root "$ROOT" ${LIB_REPO:+--repo "$LIB_REPO"} --out "$out" $ARGS)
+        roots=(); for r in $ROOT; do roots+=(--root "$r"); done
+        (cd "$DIRECTORY" && lake env "$bin" extract "${roots[@]}" ${LIB_REPO:+--repo "$LIB_REPO"} --out "$out" $ARGS)
         # The facet read from the sources: this repository's script (the action's own checkout).
         if [ "$ATTRIBUTES" = "true" ]; then
           python3 "$GITHUB_ACTION_PATH/../scripts/attributes.py" --dataset "$out" --source "$DIRECTORY"
         fi
         # The kernel check (the suite's check 2): whether each closure is all the kernel needs.
         for notion in $CHECK; do
-          (cd "$DIRECTORY" && lake env "$bin" check --root "$ROOT" --dataset "$out" --notion "$notion" $CHECK_ARGS) | tail -3
+          (cd "$DIRECTORY" && lake env "$bin" check "${roots[@]}" --dataset "$out" --notion "$notion" $CHECK_ARGS) | tail -3
           python3 - "$out" "$notion" <<'PY'
         import json, sys
         from pathlib import Path

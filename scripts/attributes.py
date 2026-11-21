@@ -9,7 +9,7 @@ extensions only it can read: Mathlib's `@[stacks 09GA "comment"]`, `@[kerodon 00
 marks one as kept only for compatibility; `@[simp]`, `@[to_additive]` say how it is used. This
 reads them from the sources, as written: the `@[…]` blocks between a declaration's doc comment and
 its keyword, over the range the `source` facet gives (under `--source`, a checkout at the dataset's
-commit).
+commit, or for a root of a dependency under its package's directory, `.lake/packages/<package>`).
 
 It writes `facets/attributes.jsonl` (schema `attributes/1`): one row per declaration written with
 attributes, `{decl, attributes: [{name, args}]}`, `args` the text after the name (`09GA "comment"`),
@@ -124,6 +124,9 @@ def main() -> int:
     if source is None:
         print("the dataset has no source facet", file=sys.stderr)
         return 1
+    # A root of a dependency has its sources in the package's directory.
+    packages = args.source / ".lake" / "packages"
+    dirs = [args.source] + (sorted(p for p in packages.iterdir() if p.is_dir()) if packages.is_dir() else [])
     files: dict[str, list[str] | None] = {}
     rows = []
     with (args.dataset / source["file"]).open(encoding="utf-8") as f:
@@ -133,8 +136,8 @@ def main() -> int:
             row = json.loads(line)
             path = row["path"]
             if path not in files:
-                file = args.source / path
-                files[path] = file.read_text(encoding="utf-8", errors="replace").splitlines() if file.exists() else None
+                file = next((d / path for d in dirs if (d / path).exists()), None)
+                files[path] = file.read_text(encoding="utf-8", errors="replace").splitlines() if file else None
             lines = files[path]
             (l0, c0), (l1, _) = row["start"], row["end"]
             if lines is None or l0 < 1 or l1 > len(lines):

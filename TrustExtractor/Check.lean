@@ -49,8 +49,8 @@ opaque kernelAdd (env : Kernel.Environment) (info : ConstantInfo) : Kernel.Envir
 
 /-- What to check. -/
 structure Config where
-  /-- The project's root module prefix, e.g. `TauCeti`. -/
-  root : Name
+  /-- The project's root module prefixes, as for `extract`. -/
+  roots : Array Name
   /-- The dataset, extracted from the project as built in the working directory. -/
   dataset : System.FilePath := "dataset"
   /-- The notion whose closures are checked: `meaning` or `term`. -/
@@ -424,7 +424,7 @@ def check (cfg : Config) : IO (Array Row) := do
   -- The project's constants, in module order, and their new names.
   let mut projectConsts : Array Name := #[]
   for h : i in [0:env.header.moduleNames.size] do
-    if cfg.root.isPrefixOf env.header.moduleNames[i] then
+    if cfg.roots.any (·.isPrefixOf env.header.moduleNames[i]) then
       projectConsts := projectConsts ++ env.header.moduleData[i]!.constNames
   let mut ren : Std.HashMap Name Name := {}
   let mut unren : Std.HashMap Name Name := {}

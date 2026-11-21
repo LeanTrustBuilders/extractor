@@ -155,6 +155,34 @@ if ! diff -r "$work/out-b-closure" "$work/out-b-closure3" >/dev/null; then
 fi
 echo "ok: the closure does not depend on the parts"
 
+# Several roots: the fixture and its dependency TrustAnnotations as one project. TrustAnnotations'
+# declarations are then project nodes of their own package, its sources found without --src-dir,
+# and the fixture's declarations keep their hashes.
+(cd "$work/b" && lake env "$bin" extract --root Fixture --root TrustAnnotations --out "$work/out-b-roots" --commit B --repo test/fixture >/dev/null)
+python3 - "$work/out-b" "$work/out-b-roots" <<'EOF5'
+import json, sys
+from pathlib import Path
+one, two = (Path(p) for p in sys.argv[1:])
+def decls(d): return {r["name"]: r for r in map(json.loads, (d / "decls.jsonl").read_text().splitlines())}
+a, b = decls(one), decls(two)
+ta = [r for r in b.values() if r["package"] == "TrustAnnotations"]
+assert ta and all(r["scope"] == "project" for r in ta), ta[:3]
+for n, r in a.items():
+    if r["scope"] == "project":
+        assert b[n]["scope"] == "project" and b[n]["hashes"] == r["hashes"], (n, r["hashes"], b[n]["hashes"])
+m = json.loads((two / "meta.json").read_text())
+pk = {p["name"]: p for p in m["packages"]}
+assert pk["Fixture"].get("project") and pk["Fixture"]["roots"] == ["Fixture"], pk["Fixture"]
+assert pk["TrustAnnotations"].get("project") and pk["TrustAnnotations"]["roots"] == ["TrustAnnotations"], pk["TrustAnnotations"]
+assert pk["TrustAnnotations"]["url"].endswith("annotations") and pk["TrustAnnotations"]["rev"], pk["TrustAnnotations"]
+assert not pk["lean4"].get("project") and m["library"]["root"] == "Fixture", m["library"]
+src = {json.loads(l)["decl"] for l in (two / "facets/source.jsonl").read_text().splitlines()}
+assert any(r["name"] in src for r in ta), "no source rows for the second root"
+EOF5
+(cd "$work/b" && lake env "$bin" check --root Fixture --root TrustAnnotations --dataset "$work/out-b-roots" --no-write --strict >/dev/null 2>&1) || {
+  echo "FAIL: the kernel check fails with two roots" >&2; exit 1; }
+echo "ok: several roots, one of them a dependency's"
+
 if [ $# -ge 1 ]; then
   mkdir -p "$1"
   rm -rf "$1/fixture-a" "$1/fixture-b" "$1/fixture-b-partial" "$1/fixture-b-closure"

@@ -83,6 +83,16 @@ package's name (`--package` overrides it; without a manifest, the root prefix), 
 name in the manifest, found by its directory with symbolic links resolved, and the toolchain's own
 library is `lean4`.
 
+**Several roots.** `--root` is repeatable (the action's `root` takes several, separated by spaces):
+the project is then the modules under any of them, which may belong to dependencies, e.g.
+`--root LMLExplore --root LeanMachineLearning --root Statlib` in LMLExplore's workspace. A root that
+no `--src-dir` has is a dependency's: its sources are found in its package's directory, and only its
+built modules are extracted, the others listed under `library.unavailable` (build the dependency's
+library first to have all of them: `lake build LeanMachineLearning`). Each project node keeps its own
+package, and `meta.json` marks the project's packages with `project` and their `roots`; a dependency
+fetched with git also has its repository's `url` and `rev` from the manifest, for links into its
+sources. `library` describes the first root.
+
 ## The dataset
 
 ```
