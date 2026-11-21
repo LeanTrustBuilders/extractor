@@ -176,8 +176,12 @@ assert pk["Fixture"].get("project") and pk["Fixture"]["roots"] == ["Fixture"], p
 assert pk["TrustAnnotations"].get("project") and pk["TrustAnnotations"]["roots"] == ["TrustAnnotations"], pk["TrustAnnotations"]
 assert pk["TrustAnnotations"]["url"].endswith("annotations") and pk["TrustAnnotations"]["rev"], pk["TrustAnnotations"]
 assert not pk["lean4"].get("project") and m["library"]["root"] == "Fixture", m["library"]
-src = {json.loads(l)["decl"] for l in (two / "facets/source.jsonl").read_text().splitlines()}
-assert any(r["name"] in src for r in ta), "no source rows for the second root"
+# Every source row of the single root is still there, and a dependency's paths are its repository's.
+def src(d): return {r["decl"]: r["path"] for r in map(json.loads, (d / "facets/source.jsonl").read_text().splitlines())}
+s1, s2 = src(one), src(two)
+assert all(s2.get(n) == p for n, p in s1.items()), [(n, p, s2.get(n)) for n, p in s1.items() if s2.get(n) != p][:3]
+ta_paths = [s2[r["name"]] for r in ta if r["name"] in s2]
+assert ta_paths and all(p.startswith("TrustAnnotations/") for p in ta_paths), ta_paths[:3]
 EOF5
 (cd "$work/b" && lake env "$bin" check --root Fixture --root TrustAnnotations --dataset "$work/out-b-roots" --no-write --strict >/dev/null 2>&1) || {
   echo "FAIL: the kernel check fails with two roots" >&2; exit 1; }
